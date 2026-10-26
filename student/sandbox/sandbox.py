@@ -1,13 +1,21 @@
+"""Sandbox used to execute LLM-generated code with restricted capabilities."""
+
 import builtins
+import contextlib
+import io
+import os
+import resource
+import signal
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pydantic
-
 from models_public import SandboxConfig
 from sandbox.security import (
     FinalAnswerException,
+    SandboxTimeoutError,
+    NetworkBlocker,
     make_safe_import,
     make_safe_open,
 )
@@ -144,3 +152,102 @@ def build_namespace(
         namespace[name] = tool
 
     return namespace
+
+
+def current_memory_bytes() -> int:
+    """Return the virtual memory currently used by this process.
+
+    Reads /proc/self/statm, so it only works on Linux.
+
+    Returns:
+        The virtual memory size of the current process, in bytes.
+    """
+    with open("/proc/self/statm") as f:
+        pages = int(f.read().split()[0])
+    return pages * os.sysconf("SC_PAGE_SIZE")
+
+
+def execute(code: str, config: SandboxConfig) -> dict:
+    """Execute untrusted code inside the sandbox namespace.
+
+    While the code runs, the network is blocked, a timeout is armed and
+    the memory usage is capped. All these restrictions are removed once
+    execution ends, whatever the outcome.
+
+    Args:
+        code: The Python source code to execute.
+        config: The sandbox configuration (imports, directories,
+            timeout and memory limits).
+
+    Returns:
+        A dict with three keys:
+            - "output": everything the code printed to stdout.
+            - "final_answer": the answer passed to final_answer(),
+              or None if it was not called.
+            - "error": a "ErrorType: message" string if the code raised
+              an exception, or None otherwise.
+    """
+    namespace = build_namespace(config)
+    output = io.StringIO()
+    answer = None
+    error = None
+
+    def on_timeout(signum: int, frame: Any) -> None:
+        """Interrupt the running code when the alarm fires.
+
+        Args:
+            signum: The signal number (SIGALRM), required by signal.signal.
+            frame: The current stack frame, required by signal.signal.
+
+        Raises:
+            SandboxTimeoutError: Always.
+        """
+        raise SandboxTimeoutError(
+            f"Execution exceeded {config.max_execution_time_seconds} seconds."
+        )
+
+    signal.signal(signal.SIGALRM, on_timeout)
+    signal.alarm(config.max_execution_time_seconds)  # start the timer
+
+    # Allow the code max_memory_mb on top of what the process already uses
+    old_limit = resource.getrlimit(resource.RLIMIT_AS)
+    new_soft = current_memory_bytes() + config.max_memory_mb * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (new_soft, old_limit[1]))
+
+    network = NetworkBlocker()
+    network.block()  # no network access while untrusted code runs
+
+    try:
+        with contextlib.redirect_stdout(output):
+            exec(code, namespace)
+    except FinalAnswerException as e:
+        answer = e.answer
+    except MemoryError:
+        error = f"MemoryError: Execution exceeded {config.max_memory_mb} MB."
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"  # e.g. "ZeroDivisionError: division by zero"
+    finally:
+        signal.alarm(0)  # always stop the timer so it cannot fire later
+        resource.setrlimit(
+            resource.RLIMIT_AS, old_limit
+        )  # remove the memory limit
+        network.unblock()  # restore network for the agent
+
+    return {"output": output.getvalue(), "final_answer": answer, "error": error}
+
+
+# Test
+# if __name__ == "__main__":
+#     config = SandboxConfig(max_execution_time_seconds=2)
+#     print(execute("print('start')\nwhile True:\n    pass", config))
+#     print(execute("x = bytearray(2 * 1024 * 1024 * 1024)", config))  # 2 GB
+#     print(
+#         execute("x = bytearray(100 * 1024 * 1024)\nprint('ok')", config)
+#     )  # 100 MB
+#     config = SandboxConfig(authorized_imports=["socket"])
+#     print(
+#         execute(
+#             "import socket\nsocket.create_connection(('example.com', 80))",
+#             config,
+#         )
+#     )

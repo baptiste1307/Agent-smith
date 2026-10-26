@@ -135,6 +135,7 @@ def make_safe_open(
     Returns:
         A safe_open function matching the signature of builtins.open.
     """
+
     def safe_open(file: Any, *args: Any, **kwargs: Any) -> Any:
         # Allow standard stream file descriptors (0=stdin, 1=stdout, 2=stderr)
         if isinstance(file, int):
@@ -158,11 +159,13 @@ def make_safe_open(
 
 class SandboxSecurityError(PermissionError):
     """Raised when sandbox security constraints are violated."""
+
     pass
 
 
 class SandboxTimeoutError(TimeoutError):
     """Raised when sandboxed execution exceeds the configured time limit."""
+
     pass
 
 
@@ -191,11 +194,14 @@ class NetworkBlocker:
 
     def __init__(self) -> None:
         self._orig_socket = socket.socket
-        self._orig_create_connection = getattr(socket, "create_connection", None)
+        self._orig_create_connection = getattr(
+            socket, "create_connection", None
+        )
         self._orig_getaddrinfo = getattr(socket, "getaddrinfo", None)
 
     def block(self) -> None:
         """Block all socket creation and connection attempts."""
+
         def disabled_socket(*args: Any, **kwargs: Any) -> Any:
             raise SandboxSecurityError(
                 "Network access is disabled by sandbox policy."
@@ -214,4 +220,3 @@ class NetworkBlocker:
             socket.create_connection = self._orig_create_connection  # type: ignore[misc]
         if self._orig_getaddrinfo:
             socket.getaddrinfo = self._orig_getaddrinfo  # type: ignore[misc]
-
