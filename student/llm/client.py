@@ -74,6 +74,8 @@ class LLMClient:
         temperature: float = 0.0,
     ) -> LLMResponse:
         """Generate response from LLM with automatic retry and key rotation."""
+        last_error = "no attempt made"  # kept to explain the final failure
+
         for attempt in range(self.max_retries + 1):
             headers, payload = self.prepare_message(messages, stop, temperature)
 
@@ -95,6 +97,13 @@ class LLMClient:
                         api_url=self.provider_url,
                     )
 
+                last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+
+                # Request errors (bad request, invalid key, forbidden, unknown
+                # model): retrying would give the same result, so stop now
+                if response.status_code in (400, 401, 403, 404):
+                    raise RuntimeError(f"LLM request rejected: {last_error}")
+
                 # Case quota / rate limit (429, 402): rotate key and retry
                 if response.status_code in (429, 402):
                     self.rotator.rotate_key()
@@ -104,7 +113,11 @@ class LLMClient:
                 # Server error (ex: 500)
                 time.sleep(1)
 
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                last_error = f"{type(e).__name__}: {e}"
                 time.sleep(1)
 
-        raise RuntimeError(f"Échec après {self.max_retries} tentatives.")
+        raise RuntimeError(
+            f"Failed after {self.max_retries + 1} attempts. "
+            f"Last error: {last_error}"
+        )
