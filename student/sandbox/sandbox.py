@@ -1,11 +1,16 @@
 import builtins
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pydantic
 
 from models_public import SandboxConfig
-from sandbox.security import make_safe_import, make_safe_open
+from sandbox.security import (
+    FinalAnswerException,
+    make_safe_import,
+    make_safe_open,
+)
 
 # Builtins removed from the sandbox namespace: they allow dynamic code
 # execution, namespace introspection or interactive I/O
@@ -87,3 +92,55 @@ def build_safe_builtins(config: SandboxConfig) -> dict[str, Any]:
         safe_builtins.pop(name, None)
 
     return safe_builtins
+
+
+def final_answer(answer: Any) -> None:
+    """Signal that the agent has finished, with its final answer.
+
+    Always injected in the sandbox namespace (it is not an MCP tool).
+
+    Args:
+        answer: The final answer (converted to str by FinalAnswerException).
+
+    Raises:
+        FinalAnswerException: Always, to stop execution and hand the
+            answer to the agent loop.
+    """
+    raise FinalAnswerException(answer)
+
+
+def build_namespace(
+    config: SandboxConfig,
+    tools: dict[str, Callable[..., Any]] | None = None,
+) -> dict[str, Any]:
+    """Build the namespace in which sandboxed code is executed.
+
+    The namespace contains the restricted builtins, final_answer and one
+    entry per MCP tool wrapper. Code run with exec(code, namespace) can
+    only reach names present in it.
+
+    Args:
+        config: The sandbox configuration used to build the builtins.
+        tools: MCP tool wrappers, mapping tool name to a Python callable.
+
+    Returns:
+        A dict to be passed as globals to exec().
+
+    Raises:
+        ValueError: If a tool name collides with a reserved name.
+    """
+    namespace: dict[str, Any] = {
+        "__builtins__": build_safe_builtins(config),
+        "__name__": "__main__",
+        "final_answer": final_answer,
+    }
+
+    for name, tool in (tools or {}).items():
+        # An MCP server must not be able to replace final_answer or builtins
+        if name in namespace:
+            raise ValueError(
+                f"MCP tool name '{name}' collides with a reserved sandbox name."
+            )
+        namespace[name] = tool
+
+    return namespace
