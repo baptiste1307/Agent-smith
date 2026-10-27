@@ -3,6 +3,7 @@
 from sandbox.sandbox import execute, load_config
 from llm.client import LLMClient
 from llm.rotator import KeyRotator
+from .prompts import build_system_prompt
 from .extractor import extract_code
 from dotenv import load_dotenv
 
@@ -32,11 +33,16 @@ def agent_loop(exercice: str):
     config = load_config("sandbox_template.json")
 
     messages = [
-        {"role": "user", "content": exercice}
-    ]  # at first messages only contains our exercice request for the AI
+        {"role": "system", "content": build_system_prompt(config)},
+        {"role": "user", "content": exercice},
+    ]  # at first messages only contains system prompt and our exercice request for the AI
 
     for turns in range(10):  # max 10 turns
-        answer = client.generate(messages)  # 1. AI gives its answer
+        answer = client.generate(
+            messages,
+            stop=["Observation:"],
+        )  # 1. AI gives its answer
+        print(f"--- Turn {turns + 1} ---\n{answer.content}\n")
         messages.append({"role": "assistant", "content": answer.content})
 
         try:
@@ -52,7 +58,12 @@ def agent_loop(exercice: str):
             return result["final_answer"]
 
         # 5. show result to AI as text
-        observation = f"Output:\n{result['output']}\nError: {result['error']}"
+        observation = f"Observation:\nOutput:\n{result['output']}\nError: {result['error']}"
+        print(observation)
         messages.append({"role": "user", "content": observation})
 
     return None  # no final answer after 10 turns
+
+
+# if __name__ == "__main__":
+#     print(agent_loop("ecris une fonction qui additionne deux nombres."))
