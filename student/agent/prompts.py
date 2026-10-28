@@ -3,6 +3,7 @@
 import textwrap
 from typing import Any
 
+from models_public import MBPPTaskInput, SWEBenchTaskInput
 from sandbox.sandbox import SandboxConfig
 
 SYSTEM_PROMPT_TEMPLATE = """You are an autonomous coding agent. You solve tasks by writing Python code.
@@ -170,3 +171,70 @@ def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
         sections.append(f"{signature}\n{textwrap.indent(description.strip(), '    ')}")
 
     return "\n\n".join(sections)
+
+
+MBPP_TASK_TEMPLATE = """Task: {task_definition}
+
+Your function must have exactly this signature:
+{function_definition}
+
+Your solution must pass these tests:
+{tests}
+
+Some hidden tests will also be run: write a general solution, do not hard-code the test values.
+
+Test your function on these asserts first. When they all pass, call final_answer() with the full source code of your function as a string."""
+
+
+def build_mbpp_task_prompt(task: MBPPTaskInput) -> str:
+    """Write the message that asks the LLM to solve one MBPP task.
+
+    Args:
+        task: The MBPP task given by the moulinette.
+
+    Returns:
+        The task message, sent to the LLM after the system prompt.
+    """
+    tests = "\n".join(task.test_imports + task.test_list)
+    return MBPP_TASK_TEMPLATE.format(
+        task_definition=task.task_definition,
+        function_definition=task.function_definition,
+        tests=tests or "No public test is given.",
+    )
+
+
+SWEBENCH_TASK_TEMPLATE = """Task: fix the following GitHub issue of the repository {repo}.
+
+The repository is in /testbed. Your changes to its files are the solution.
+
+<issue>
+{problem_statement}
+</issue>
+{hints}
+Work step by step, one small action per turn:
+1. Explore: find the files and functions related to the issue (search the code, then read the relevant parts).
+2. Understand: find the root cause of the bug before changing anything.
+3. Fix: make the smallest change that solves the issue. Do not modify the existing tests.
+4. Check: run the tests and read the result. If they fail, go back to step 2.
+
+When the tests pass, call final_answer(get_patch()) to submit your changes as a git patch."""
+
+
+def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:
+    """Write the message that asks the LLM to solve one SWE-bench task.
+
+    Args:
+        task: The SWE-bench task given by the moulinette.
+
+    Returns:
+        The task message, sent to the LLM after the system prompt.
+    """
+    hints = ""
+    if task.hints_text.strip():
+        hints = f"\n<hints>\n{task.hints_text.strip()}\n</hints>\n"
+
+    return SWEBENCH_TASK_TEMPLATE.format(
+        repo=task.repo or "under test",
+        problem_statement=task.problem_statement.strip(),
+        hints=hints,
+    )
