@@ -10,6 +10,7 @@ from tools.fs_tools import (
     list_files,
     read_file,
 )
+from tools.mbpp_tools import run_tests_mbpp
 from tools.search_tools import (
     find_references,
     search_code,
@@ -29,4 +30,6 @@ __all__ = [
     "run_tests",
     "get_patch",
     "run_command",
+    # MBPP tools
+    "run_tests_mbpp",
 ]

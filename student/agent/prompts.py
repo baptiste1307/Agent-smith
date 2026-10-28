@@ -1,7 +1,9 @@
 """Prompts sent to the LLM."""
 
+import textwrap
 from typing import Any
 
+from models_public import MBPPTaskInput, SWEBenchTaskInput
 from sandbox.sandbox import SandboxConfig
 
 SYSTEM_PROMPT_TEMPLATE = """You are an autonomous coding agent. You solve tasks by writing Python code.
@@ -110,6 +112,28 @@ JSON_TO_PYTHON_TYPES = {
 }
 
 
+def json_type_to_python(param_info: dict[str, Any]) -> str:
+    """Convert the JSON Schema of one parameter into a Python type name.
+
+    A parameter typed `str | Path` in Python becomes an "anyOf" list in
+    JSON Schema: each option is converted, and duplicates are removed.
+
+    Args:
+        param_info: The JSON Schema of the parameter.
+
+    Returns:
+        The Python type, for example "str" or "int | None", or "Any" if
+        the schema gives no type.
+    """
+    if "anyOf" in param_info:
+        options = [json_type_to_python(option) for option in param_info["anyOf"]]
+        unique_options = list(dict.fromkeys(options))  # keeps the order
+        return " | ".join(unique_options)
+    if param_info.get("type") == "null":
+        return "None"
+    return JSON_TO_PYTHON_TYPES.get(param_info.get("type"), "Any")
+
+
 def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
     """Describe the MCP tools as Python signatures the LLM can read.
 
@@ -118,7 +142,7 @@ def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
     server may be unknown.
 
     Args:
-        mcp_tools: The tools of the MCP server, each with a "name", a
+        mcp_tools_schema: The tools of the MCP server, each with a "name", a
             "description" and an "inputSchema" (JSON Schema).
 
     Returns:
@@ -132,16 +156,85 @@ def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
 
         params = []
         for param_name, param_info in properties.items():
-            python_type = JSON_TO_PYTHON_TYPES.get(
-                param_info.get("type"), "Any"
-            )
-            param = f"{param_name}: {python_type}"
+            param = f"{param_name}: {json_type_to_python(param_info)}"
             if param_name not in required:
-                param += " = optional"
+                # Show the real default value when the schema gives one
+                if "default" in param_info:
+                    param += f" = {param_info['default']!r}"
+                else:
+                    param += " = optional"
             params.append(param)
 
         signature = f"{tool.get('name', 'unknown_tool')}({', '.join(params)})"
         description = tool.get("description") or "No description."
-        sections.append(f"{signature}\n    {description}")
+        # Indent every line, so the description stays under its signature
+        sections.append(f"{signature}\n{textwrap.indent(description.strip(), '    ')}")
 
     return "\n\n".join(sections)
+
+
+MBPP_TASK_TEMPLATE = """Task: {task_definition}
+
+Your function must have exactly this signature:
+{function_definition}
+
+Your solution must pass these tests:
+{tests}
+
+Some hidden tests will also be run: write a general solution, do not hard-code the test values.
+
+Test your function on these asserts first. When they all pass, call final_answer() with the full source code of your function as a string."""
+
+
+def build_mbpp_task_prompt(task: MBPPTaskInput) -> str:
+    """Write the message that asks the LLM to solve one MBPP task.
+
+    Args:
+        task: The MBPP task given by the moulinette.
+
+    Returns:
+        The task message, sent to the LLM after the system prompt.
+    """
+    tests = "\n".join(task.test_imports + task.test_list)
+    return MBPP_TASK_TEMPLATE.format(
+        task_definition=task.task_definition,
+        function_definition=task.function_definition,
+        tests=tests or "No public test is given.",
+    )
+
+
+SWEBENCH_TASK_TEMPLATE = """Task: fix the following GitHub issue of the repository {repo}.
+
+The repository is in /testbed. Your changes to its files are the solution.
+
+<issue>
+{problem_statement}
+</issue>
+{hints}
+Work step by step, one small action per turn:
+1. Explore: find the files and functions related to the issue (search the code, then read the relevant parts).
+2. Understand: find the root cause of the bug before changing anything.
+3. Fix: make the smallest change that solves the issue. Do not modify the existing tests.
+4. Check: run the tests and read the result. If they fail, go back to step 2.
+
+When the tests pass, call final_answer(get_patch()) to submit your changes as a git patch."""
+
+
+def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:
+    """Write the message that asks the LLM to solve one SWE-bench task.
+
+    Args:
+        task: The SWE-bench task given by the moulinette.
+
+    Returns:
+        The task message, sent to the LLM after the system prompt.
+    """
+    hints = ""
+    if task.hints_text.strip():
+        hints = f"\n<hints>\n{task.hints_text.strip()}\n</hints>\n"
+
+    return SWEBENCH_TASK_TEMPLATE.format(
+        repo=task.repo or "under test",
+        problem_statement=task.problem_statement.strip(),
+        hints=hints,
+    )
