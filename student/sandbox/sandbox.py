@@ -12,10 +12,11 @@ from typing import Any
 
 import pydantic
 from models_public import SandboxConfig
+
 from sandbox.security import (
     FinalAnswerException,
-    SandboxTimeoutError,
     NetworkBlocker,
+    SandboxTimeoutError,
     make_safe_import,
     make_safe_open,
 )
@@ -37,6 +38,8 @@ FORBIDDEN_BUILTINS = (
     "credits",
     "license",
 )
+
+MAX_OUTPUT_CHARS = 10_000
 
 
 def load_config(sandbox_template_path: str | None = None) -> SandboxConfig:
@@ -229,6 +232,13 @@ def execute(
         answer = e.answer
     except MemoryError:
         error = f"MemoryError: Execution exceeded {config.max_memory_mb} MB."
+    except SandboxTimeoutError:
+        error = (
+            f"SandboxTimeoutError: Execution stopped after "
+            f"{config.max_execution_time_seconds} seconds. The output above is "
+            f"partial: it only contains what was printed before the stop. "
+            f"Look for an infinite loop or a too slow algorithm."
+        )
     except Exception as e:
         error = f"{type(e).__name__}: {e}"  # e.g. "ZeroDivisionError: division by zero"
     finally:
@@ -238,7 +248,16 @@ def execute(
         )  # remove the memory limit
         network.unblock()  # restore network for the agent
 
-    return {"output": output.getvalue(), "final_answer": answer, "error": error}
+    text = output.getvalue()
+
+    if len(text) > MAX_OUTPUT_CHARS:
+        text = (
+            f"{text[: MAX_OUTPUT_CHARS // 2]}"
+            + f"\n... [output truncated: {len(text)} characters in total, only the first and last {MAX_OUTPUT_CHARS // 2} are shown] ...\n"
+            + f"{text[-MAX_OUTPUT_CHARS // 2 :]}"
+        )
+
+    return {"output": text, "final_answer": answer, "error": error}
 
 
 # Test
