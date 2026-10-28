@@ -60,7 +60,7 @@ def agent_loop(
         messages.append({"role": "assistant", "content": answer.content})
 
         try:
-            code = extract_code(answer.content)  # 2. Extract code from answer
+            code, warning = extract_code(answer.content)  # 2. Extract code
 
         except ValueError as e:
             messages.append({"role": "user", "content": f"{e}"})
@@ -73,6 +73,8 @@ def agent_loop(
 
         # 5. show result to AI as text
         observation = f"Observation:\nOutput:\n{result['output']}\nError: {result['error']}"
+        if warning is not None:  # the code block was malformed
+            observation = f"{warning}\n{observation}"
         print(observation)
         messages.append({"role": "user", "content": observation})
 
