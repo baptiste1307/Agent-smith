@@ -12,6 +12,8 @@ from tools.fs_tools import (
     list_files,
 )
 
+from tools.mbpp_tools import run_tests_mbpp
+
 __all__ = [
     "search_code",
     "search_function_or_class_definition_in_code",
@@ -19,4 +21,5 @@ __all__ = [
     "read_file",
     "edit_file",
     "list_files",
+    "run_tests_mbpp",
 ]
