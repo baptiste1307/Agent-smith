@@ -3,7 +3,7 @@
 import asyncio
 import shlex
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from mcp import Client, StdioServerParameters
 
@@ -40,7 +40,9 @@ class MCPClient:
 
         # The background thread runs its own event loop, forever
         self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop.run_forever, daemon=True
+        )
         self._thread.start()
 
         # Ask the background loop to open the connection and wait in it
@@ -75,3 +77,99 @@ class MCPClient:
             self._session_future.result()  # wait for the block to exit
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()
+
+    def _call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        """Call a tool on the server and wait for its answer.
+
+        The call runs in the background loop, since the connection lives
+        there. This method blocks until the server answers.
+
+        Args:
+            name: The name of the tool.
+            arguments: The arguments of the tool, by parameter name.
+
+        Returns:
+            The text answered by the tool.
+
+        Raises:
+            RuntimeError: If the tool reported an error.
+        """
+        future = asyncio.run_coroutine_threadsafe(
+            self._client.call_tool(name, arguments), self._loop
+        )
+        result = future.result()  # wait for the server answer
+
+        text = "\n".join(
+            getattr(content, "text", str(content)) for content in result.content
+        )
+        if result.is_error:
+            raise RuntimeError(f"Tool '{name}' failed: {text}")
+        return text
+
+    def get_schemas(self) -> list[dict[str, Any]]:
+        """Describe the server tools, in the format used by the prompt.
+
+        Returns:
+            One dict per tool, with its "name", "description" and
+            "inputSchema" (the JSON Schema of its parameters).
+        """
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.input_schema,
+            }
+            for tool in self._tools
+        ]
+
+    def _make_wrapper(self, name: str, param_names: list[str]) -> Callable[..., str]:
+        """Create a normal Python function that calls one MCP tool.
+
+        The returned function remembers `name` and `param_names` (it is a
+        closure), so each tool gets its own wrapper. It accepts arguments
+        by position or by name, like a normal Python function.
+
+        Args:
+            name: The name of the tool the wrapper will call.
+            param_names: The tool parameter names, in the order of its
+                signature, used to name the positional arguments.
+
+        Returns:
+            A function such as read_file("a.py", end_line=2), returning
+            the tool answer.
+        """
+
+        def wrapper(*args: Any, **kwargs: Any) -> str:
+            # args gathers the positional arguments, e.g. ("a.py",)
+            # kwargs gathers the named arguments, e.g. {"end_line": 2}
+            if len(args) > len(param_names):
+                raise TypeError(
+                    f"{name}() takes at most {len(param_names)} positional "
+                    f"arguments ({', '.join(param_names)}) "
+                    f"but {len(args)} were given."
+                )
+
+            # MCP only accepts named arguments: name the positional ones
+            arguments = dict(zip(param_names, args))
+            for key, value in kwargs.items():
+                if key in arguments:
+                    raise TypeError(f"{name}() got multiple values for argument '{key}'.")
+                arguments[key] = value
+
+            return self._call_tool(name, arguments)
+
+        return wrapper
+
+    def get_wrappers(self) -> dict[str, Callable[..., str]]:
+        """Create one wrapper per server tool, to put in the sandbox namespace.
+
+        Returns:
+            A dict mapping each tool name to its wrapper function.
+        """
+        wrappers = {}
+        for tool in self._tools:
+            # The schema keeps the parameters in the order of the signature
+            param_names = list(tool.input_schema.get("properties", {}))
+            wrappers[tool.name] = self._make_wrapper(tool.name, param_names)
+
+        return wrappers

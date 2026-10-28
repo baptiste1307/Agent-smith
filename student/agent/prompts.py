@@ -1,5 +1,6 @@
 """Prompts sent to the LLM."""
 
+import textwrap
 from typing import Any
 
 from sandbox.sandbox import SandboxConfig
@@ -110,6 +111,28 @@ JSON_TO_PYTHON_TYPES = {
 }
 
 
+def json_type_to_python(param_info: dict[str, Any]) -> str:
+    """Convert the JSON Schema of one parameter into a Python type name.
+
+    A parameter typed `str | Path` in Python becomes an "anyOf" list in
+    JSON Schema: each option is converted, and duplicates are removed.
+
+    Args:
+        param_info: The JSON Schema of the parameter.
+
+    Returns:
+        The Python type, for example "str" or "int | None", or "Any" if
+        the schema gives no type.
+    """
+    if "anyOf" in param_info:
+        options = [json_type_to_python(option) for option in param_info["anyOf"]]
+        unique_options = list(dict.fromkeys(options))  # keeps the order
+        return " | ".join(unique_options)
+    if param_info.get("type") == "null":
+        return "None"
+    return JSON_TO_PYTHON_TYPES.get(param_info.get("type"), "Any")
+
+
 def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
     """Describe the MCP tools as Python signatures the LLM can read.
 
@@ -118,7 +141,7 @@ def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
     server may be unknown.
 
     Args:
-        mcp_tools: The tools of the MCP server, each with a "name", a
+        mcp_tools_schema: The tools of the MCP server, each with a "name", a
             "description" and an "inputSchema" (JSON Schema).
 
     Returns:
@@ -132,16 +155,18 @@ def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
 
         params = []
         for param_name, param_info in properties.items():
-            python_type = JSON_TO_PYTHON_TYPES.get(
-                param_info.get("type"), "Any"
-            )
-            param = f"{param_name}: {python_type}"
+            param = f"{param_name}: {json_type_to_python(param_info)}"
             if param_name not in required:
-                param += " = optional"
+                # Show the real default value when the schema gives one
+                if "default" in param_info:
+                    param += f" = {param_info['default']!r}"
+                else:
+                    param += " = optional"
             params.append(param)
 
         signature = f"{tool.get('name', 'unknown_tool')}({', '.join(params)})"
         description = tool.get("description") or "No description."
-        sections.append(f"{signature}\n    {description}")
+        # Indent every line, so the description stays under its signature
+        sections.append(f"{signature}\n{textwrap.indent(description.strip(), '    ')}")
 
     return "\n\n".join(sections)
