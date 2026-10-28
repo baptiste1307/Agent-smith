@@ -13,7 +13,8 @@ load_dotenv()  # reads the .env file
 
 def agent_loop(
     exercice: str,
-    mcp_tools: dict[str, Callable[..., Any]] | None = None,
+    mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
+    mcp_tools_schema: list[dict[str, Any]] | None = None,
 ):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
@@ -23,8 +24,11 @@ def agent_loop(
 
     Args:
         exercice: The exercise statement sent to the LLM.
-        mcp_tools: MCP tool wrappers, mapping tool name to a Python
+        mcp_tools_wrappers: MCP tool wrappers, mapping tool name to a Python
             callable, injected in the sandbox namespace. None if no MCP
+            server is connected.
+        mcp_tools_schema: Descriptions of the same tools (name, description,
+            inputSchema), written in the system prompt. None if no MCP
             server is connected.
 
     Returns:
@@ -40,7 +44,10 @@ def agent_loop(
     config = load_config("sandbox_template.json")
 
     messages = [
-        {"role": "system", "content": build_system_prompt(config)},
+        {
+            "role": "system",
+            "content": build_system_prompt(config, mcp_tools_schema),
+        },
         {"role": "user", "content": exercice},
     ]  # at first messages only contains system prompt and our exercice request for the AI
 
@@ -59,7 +66,7 @@ def agent_loop(
             messages.append({"role": "user", "content": f"{e}"})
             continue
 
-        result = execute(code, config, mcp_tools)  # 3. Execute code
+        result = execute(code, config, mcp_tools_wrappers)  # 3. Execute code
 
         if result["final_answer"] is not None:  # 4. Is AI Done ?
             return result["final_answer"]
@@ -72,14 +79,19 @@ def agent_loop(
     return None  # no final answer after 10 turns
 
 
-if __name__ == "__main__":
-    from tools import read_file
-
-    print(
-        agent_loop(
-            "You have a function read_file(filepath: str) already defined. "
-            "Use it to read the file 'sandbox_template.json', then give as "
-            "final answer the value of max_execution_time_seconds.",
-            mcp_tools={"read_file": read_file},
-        )
-    )
+# Manual test, to run once mcp_tools_mbpp.py exposes the tools:
+# if __name__ == "__main__":
+#     from mcp_client.client import MCPClient
+#
+#     mcp_client = MCPClient("python ../mcp_tools_mbpp.py")
+#     try:
+#         print(
+#             agent_loop(
+#                 "Read the file 'sandbox_template.json', then give as "
+#                 "final answer the value of max_execution_time_seconds.",
+#                 mcp_tools_wrappers=mcp_client.get_wrappers(),
+#                 mcp_tools_schema=mcp_client.get_schemas(),
+#             )
+#         )
+#     finally:
+#         mcp_client.close()
