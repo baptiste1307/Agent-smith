@@ -3,6 +3,7 @@
 from sandbox.sandbox import execute, load_config
 from llm.client import LLMClient
 from llm.rotator import KeyRotator
+from typing import Any, Callable
 from .prompts import build_system_prompt
 from .extractor import extract_code
 from dotenv import load_dotenv
@@ -10,7 +11,10 @@ from dotenv import load_dotenv
 load_dotenv()  # reads the .env file
 
 
-def agent_loop(exercice: str):
+def agent_loop(
+    exercice: str,
+    mcp_tools: dict[str, Callable[..., Any]] | None = None,
+):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
     At each turn, the LLM answers, its code is extracted and executed in
@@ -19,6 +23,9 @@ def agent_loop(exercice: str):
 
     Args:
         exercice: The exercise statement sent to the LLM.
+        mcp_tools: MCP tool wrappers, mapping tool name to a Python
+            callable, injected in the sandbox namespace. None if no MCP
+            server is connected.
 
     Returns:
         The answer passed to final_answer(), or None if the LLM did not
@@ -52,7 +59,7 @@ def agent_loop(exercice: str):
             messages.append({"role": "user", "content": f"{e}"})
             continue
 
-        result = execute(code, config)  # 3. Execute code
+        result = execute(code, config, mcp_tools)  # 3. Execute code
 
         if result["final_answer"] is not None:  # 4. Is AI Done ?
             return result["final_answer"]
@@ -65,5 +72,14 @@ def agent_loop(exercice: str):
     return None  # no final answer after 10 turns
 
 
-# if __name__ == "__main__":
-#     print(agent_loop("ecris une fonction qui additionne deux nombres."))
+if __name__ == "__main__":
+    from tools import read_file
+
+    print(
+        agent_loop(
+            "You have a function read_file(filepath: str) already defined. "
+            "Use it to read the file 'sandbox_template.json', then give as "
+            "final answer the value of max_execution_time_seconds.",
+            mcp_tools={"read_file": read_file},
+        )
+    )

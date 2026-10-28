@@ -72,13 +72,13 @@ final_answer("def largest(numbers):\\n    return max(numbers)")
 
 def build_system_prompt(
     config: SandboxConfig,
-    mcp_tools: list[dict[str, Any]] | None = None,
+    mcp_tools_schema: list[dict[str, Any]] | None = None,
 ) -> str:
     """Fill the system prompt template with the sandbox settings and tools.
 
     Args:
         config: The sandbox configuration, used to list allowed imports.
-        mcp_tools: The tools of the connected MCP server, or None if no
+        mcp_tools_schema: The tools of the connected MCP server, or None if no
             server is connected.
 
     Returns:
@@ -88,8 +88,8 @@ def build_system_prompt(
     imports = ", ".join(
         m for m in config.authorized_imports if not m.endswith(".*")
     )
-    if mcp_tools:
-        tools_manual = build_mcp_tools_manual(mcp_tools)
+    if mcp_tools_schema:
+        tools_manual = build_mcp_tools_manual(mcp_tools_schema)
     else:
         tools_manual = "No MCP tool is connected: use plain Python only."
 
@@ -110,7 +110,7 @@ JSON_TO_PYTHON_TYPES = {
 }
 
 
-def build_mcp_tools_manual(mcp_tools: list[dict[str, Any]]) -> str:
+def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
     """Describe the MCP tools as Python signatures the LLM can read.
 
     Each tool becomes a signature line followed by its indented
@@ -125,14 +125,16 @@ def build_mcp_tools_manual(mcp_tools: list[dict[str, Any]]) -> str:
         The manual of all the tools, one section per tool.
     """
     sections = []
-    for tool in mcp_tools:
+    for tool in mcp_tools_schema:
         schema = tool.get("inputSchema", {})
         properties = schema.get("properties", {})
         required = schema.get("required", [])
 
         params = []
         for param_name, param_info in properties.items():
-            python_type = JSON_TO_PYTHON_TYPES.get(param_info.get("type"), "Any")
+            python_type = JSON_TO_PYTHON_TYPES.get(
+                param_info.get("type"), "Any"
+            )
             param = f"{param_name}: {python_type}"
             if param_name not in required:
                 param += " = optional"

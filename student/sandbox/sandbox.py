@@ -167,7 +167,11 @@ def current_memory_bytes() -> int:
     return pages * os.sysconf("SC_PAGE_SIZE")
 
 
-def execute(code: str, config: SandboxConfig) -> dict:
+def execute(
+    code: str,
+    config: SandboxConfig,
+    tools: dict[str, Callable[..., Any]] | None = None,
+) -> dict:
     """Execute untrusted code inside the sandbox namespace.
 
     While the code runs, the network is blocked, a timeout is armed and
@@ -178,6 +182,7 @@ def execute(code: str, config: SandboxConfig) -> dict:
         code: The Python source code to execute.
         config: The sandbox configuration (imports, directories,
             timeout and memory limits).
+        tools: MCP tool wrappers, mapping tool name to a Python callable.
 
     Returns:
         A dict with three keys:
@@ -187,7 +192,7 @@ def execute(code: str, config: SandboxConfig) -> dict:
             - "error": a "ErrorType: message" string if the code raised
               an exception, or None otherwise.
     """
-    namespace = build_namespace(config)
+    namespace = build_namespace(config, tools)
     output = io.StringIO()
     answer = None
     error = None
