@@ -1,12 +1,16 @@
 """Agent loop: makes the LLM and the sandbox work together."""
 
-from sandbox.sandbox import execute, load_config
-from llm.client import LLMClient
-from llm.rotator import KeyRotator
-from typing import Any, Callable
-from .prompts import build_system_prompt
-from .extractor import extract_code
+from collections.abc import Callable
+from typing import Any
+
 from dotenv import load_dotenv
+from llm.client import LLMClient
+from llm.metrics import MetricsTracker
+from llm.rotator import KeyRotator
+from sandbox.sandbox import execute, load_config
+
+from .extractor import extract_code
+from .prompts import build_system_prompt
 
 load_dotenv()  # reads the .env file
 
@@ -15,12 +19,16 @@ def agent_loop(
     exercice: str,
     mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
     mcp_tools_schema: list[dict[str, Any]] | None = None,
+    model_name: str = "poolside/laguna-s-2.1:free",
+    provider_url: str = "https://openrouter.ai/api/v1",
+    max_iterations: int = 10,
+    tracker: MetricsTracker | None = None,
 ):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
     At each turn, the LLM answers, its code is extracted and executed in
     the sandbox, and the result is sent back to the LLM. The loop stops
-    when the code calls final_answer() or after 10 turns.
+    when the code calls final_answer() or after max_iterations turns.
 
     Args:
         exercice: The exercise statement sent to the LLM.
@@ -30,45 +38,67 @@ def agent_loop(
         mcp_tools_schema: Descriptions of the same tools (name, description,
             inputSchema), written in the system prompt. None if no MCP
             server is connected.
+        model_name: Name of the LLM, as expected by the provider.
+        provider_url: Base URL of the LLM provider API.
+        max_iterations: Maximum number of turns before giving up.
+        tracker: Records the metrics of each turn, for solution.json.
+            None to run without recording.
 
     Returns:
         The answer passed to final_answer(), or None if the LLM did not
-        finish within 10 turns.
+        finish within max_iterations turns.
     """
     client = LLMClient(
-        provider_url="https://openrouter.ai/api/v1",
-        model_name="poolside/laguna-s-2.1:free",
+        provider_url,
+        model_name,
         rotator=KeyRotator.from_env("OPENROUTER_API_KEY"),
     )
 
     config = load_config("sandbox_template.json")
+    system_prompt = build_system_prompt(config, mcp_tools_schema)
 
     messages = [
         {
             "role": "system",
-            "content": build_system_prompt(config, mcp_tools_schema),
+            "content": system_prompt,
         },
         {"role": "user", "content": exercice},
     ]  # at first messages only contains system prompt and our exercice request for the AI
 
-    for turns in range(10):  # max 10 turns
+    if tracker:
+        tracker.system_prompt = system_prompt
+
+    for turns in range(max_iterations):  # max turns
         answer = client.generate(
             messages,
             stop=["Observation:"],
         )  # 1. AI gives its answer
-        print(f"--- Turn {turns + 1} ---\n{answer.content}\n")
-        messages.append({"role": "assistant", "content": answer.content})
+        # Some providers ignore `stop`: the LLM then invents the Observation
+        # and keeps going. Keep only the text before the first Observation.
+        content = answer.content.split("Observation:", 1)[0].rstrip()
+        print(f"--- Turn {turns + 1} ---\n{content}\n")
+        messages.append({"role": "assistant", "content": content})
 
         try:
-            code, warning = extract_code(answer.content)  # 2. Extract code
+            code, warning = extract_code(content)  # 2. Extract code
 
         except ValueError as e:
+            if tracker:  # no code to run: sandbox_input stays empty
+                tracker.record_step(
+                    answer, sandbox_input="", sandbox_output=str(e)
+                )
             messages.append({"role": "user", "content": f"{e}"})
             continue
 
         result = execute(code, config, mcp_tools_wrappers)  # 3. Execute code
 
         if result["final_answer"] is not None:  # 4. Is AI Done ?
+            if tracker:
+                tracker.record_step(
+                    answer,
+                    sandbox_input=code,
+                    sandbox_output=f"Final answer: {result['final_answer']}",
+                )
             return result["final_answer"]
 
         # 5. show result to AI as text
@@ -76,9 +106,19 @@ def agent_loop(
         if warning is not None:  # the code block was malformed
             observation = f"{warning}\n{observation}"
         print(observation)
+        if tracker:
+            tracker.record_step(
+                answer, sandbox_input=code, sandbox_output=observation
+            )
         messages.append({"role": "user", "content": observation})
 
-    return None  # no final answer after 10 turns
+        # 6. stop before the next turn if a limit is exceeded
+        if tracker:
+            exceeded, reason = tracker.check_limits()
+            if exceeded:
+                raise RuntimeError(f"Limit exceeded: {reason}")
+
+    return None  # no final answer after max_iterations turns
 
 
 # Manual test, to run once mcp_tools_mbpp.py exposes the tools:
