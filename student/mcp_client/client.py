@@ -1,6 +1,5 @@
-"""MCP client: connects to an MCP server and exposes its tools synchronously."""
-
 import asyncio
+import os
 import shlex
 import threading
 from typing import Any, Callable
@@ -33,7 +32,11 @@ class MCPClient:
             self._server: str | StdioServerParameters = server
         else:
             command, *args = shlex.split(server)
-            self._server = StdioServerParameters(command=command, args=args)
+            self._server = StdioServerParameters(
+                command=command,
+                args=args,
+                env=dict(os.environ),
+            )
 
         self._tools: list[Any] = []
         self._ready = threading.Event()  # set by the thread once connected

@@ -217,7 +217,9 @@ Work step by step, one small action per turn:
 3. Fix: make the smallest change that solves the issue. Do not modify the existing tests.
 4. Check: run the tests and read the result. If they fail, go back to step 2.
 
-When the tests pass, call final_answer(get_patch()) to submit your changes as a git patch."""
+Always print the result of each tool call so you can read it in the Observation. Work only from the repository and task context; do not fetch external issues, pull requests, or patches.
+
+When the tests pass and get_patch() is not empty, call final_answer(get_patch()) to submit your changes as a git patch."""
 
 
 def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:
