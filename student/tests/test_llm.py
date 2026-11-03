@@ -17,7 +17,7 @@ class TestLLMConnection(unittest.TestCase):
     def test_live_llm_call(self):
         client = LLMClient(
             provider_url="https://openrouter.ai/api/v1",
-            model_name="poolside/laguna-s-2.1:free",
+            model_name="liquid/lfm-2.5-2.6b:free",
             rotator=KeyRotator.from_env("OPENROUTER_API_KEY"),
         )
         response = client.generate(

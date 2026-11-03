@@ -1,6 +1,7 @@
 """Agent loop: makes the LLM and the sandbox work together."""
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -14,12 +15,15 @@ from .prompts import build_system_prompt
 
 load_dotenv()  # reads the .env file
 
+DEFAULT_SANDBOX_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "sandbox_template.json"
+)
 
 def agent_loop(
     exercice: str,
     mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
     mcp_tools_schema: list[dict[str, Any]] | None = None,
-    model_name: str = "poolside/laguna-s-2.1:free",
+    model_name: str = "liquid/lfm-2.5-2.6b:free",
     provider_url: str = "https://openrouter.ai/api/v1",
     max_iterations: int = 10,
     tracker: MetricsTracker | None = None,
@@ -54,7 +58,7 @@ def agent_loop(
         rotator=KeyRotator.from_env("OPENROUTER_API_KEY"),
     )
 
-    config = load_config("sandbox_template.json")
+    config = load_config(str(DEFAULT_SANDBOX_CONFIG_PATH))
     system_prompt = build_system_prompt(config, mcp_tools_schema)
 
     messages = [

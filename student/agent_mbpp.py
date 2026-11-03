@@ -13,7 +13,7 @@ def main():
 
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", default="poolside/laguna-s-2.1:free")
+    parser.add_argument("--model-name", default="liquid/lfm-2.5-2.6b:free")
     parser.add_argument(
         "--provider-url", default="https://openrouter.ai/api/v1"
     )
