@@ -87,10 +87,29 @@ class LLMClient:
                 # Success case 200 OK
                 if response.status_code == 200:
                     data = response.json()
+                    choice = data["choices"][0]
+                    message = choice.get("message", {})
+                    raw_content = message.get("content")
+                    if raw_content is None:
+                        tool_calls = message.get("tool_calls", [])
+                        if tool_calls:
+                            parts = []
+                            for tc in tool_calls:
+                                fn = tc.get("function", {})
+                                name = fn.get("name", "")
+                                args = fn.get("arguments", "{}")
+                                parts.append(
+                                    f'<tool_call>\n{{"name": "{name}", "arguments": {args}}}\n</tool_call>'
+                                )
+                            raw_content = "\n".join(parts)
+                        else:
+                            raw_content = ""
+
+                    usage = data.get("usage") or {}
                     return LLMResponse(
-                        content=data["choices"][0]["message"]["content"],
-                        input_tokens=data["usage"]["prompt_tokens"],
-                        output_tokens=data["usage"]["completion_tokens"],
+                        content=raw_content,
+                        input_tokens=usage.get("prompt_tokens", 0),
+                        output_tokens=usage.get("completion_tokens", 0),
                         request_time_ms=elapsed_ms,
                         retries=attempt,
                         model_name=self.model_name,

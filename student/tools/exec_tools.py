@@ -10,8 +10,43 @@ All commands and patch generations run in the repository located at TESTBED_PATH
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
+
+
+def _apply_patch_to_docker(cid: str, patch: str) -> bool:
+    """Apply unified git diff to /testbed inside a running container."""
+    with tempfile.NamedTemporaryFile("w", suffix=".diff", delete=False) as f:
+        f.write(patch)
+        temp_diff = f.name
+    try:
+        cp_res = subprocess.run(
+            ["docker", "cp", temp_diff, f"{cid}:/tmp/patch.diff"],
+            capture_output=True,
+        )
+        if cp_res.returncode != 0:
+            return False
+        # Reset uncommitted files first so patch applies cleanly
+        subprocess.run(
+            ["docker", "exec", "-w", "/testbed", cid, "git", "checkout", "."],
+            capture_output=True,
+        )
+        for apply_cmd in (
+            "git apply --verbose /tmp/patch.diff",
+            "git apply --verbose --reject /tmp/patch.diff",
+            "patch --batch --fuzz=5 -p1 -i /tmp/patch.diff",
+        ):
+            res = subprocess.run(
+                ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "-c", apply_cmd],
+                capture_output=True,
+            )
+            if res.returncode == 0:
+                return True
+        return False
+    finally:
+        if os.path.exists(temp_diff):
+            os.remove(temp_diff)
 
 
 def get_testbed_path() -> Path:
@@ -63,6 +98,49 @@ def run_command(
             "stderr": f"Error: Working directory '{cwd}' is not a directory.",
             "exit_code": 1,
         }
+
+    cid = os.environ.get("DOCKER_CONTAINER_ID")
+    if cid:
+        # Sync current changes to container before running command
+        patch = get_patch()
+        if patch:
+            _apply_patch_to_docker(cid, patch)
+
+        container_workdir = "/testbed"
+        try:
+            rel = cwd.relative_to(get_testbed_path())
+            container_workdir = f"/testbed/{rel}" if str(rel) != "." else "/testbed"
+        except ValueError:
+            container_workdir = "/testbed"
+
+        cmd = ["docker", "exec", "-w", container_workdir, cid, "/bin/bash", "-c", command]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return {
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "exit_code": proc.returncode,
+            }
+        except subprocess.TimeoutExpired as e:
+            stdout = e.stdout if isinstance(e.stdout, str) else (e.stdout.decode() if e.stdout else "")
+            stderr = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode() if e.stderr else "")
+            timeout_msg = f"\nCommand timed out after {timeout} seconds."
+            return {
+                "stdout": stdout,
+                "stderr": (stderr + timeout_msg).strip(),
+                "exit_code": 124,
+            }
+        except Exception as e:
+            return {
+                "stdout": "",
+                "stderr": f"Error executing command in docker: {e}",
+                "exit_code": 1,
+            }
 
     try:
         proc = subprocess.run(
@@ -161,6 +239,37 @@ def run_tests(
         Combined stdout and stderr of the test execution.
     """
     cwd = resolve_workdir(workdir)
+
+    cid = os.environ.get("DOCKER_CONTAINER_ID")
+    if cid:
+        patch = get_patch()
+        if patch:
+            _apply_patch_to_docker(cid, patch)
+
+        if test_command:
+            cmd_result = run_command(test_command, workdir=cwd, timeout=timeout)
+            return f"{cmd_result['stdout']}\n{cmd_result['stderr']}".strip()
+
+        eval_script = os.environ.get("EVAL_SCRIPT")
+        if eval_script and eval_script.strip():
+            with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
+                f.write(eval_script)
+                temp_sh = f.name
+            try:
+                subprocess.run(["docker", "cp", temp_sh, f"{cid}:/eval.sh"], check=False)
+                subprocess.run(["docker", "exec", "-w", "/testbed", cid, "chmod", "+x", "/eval.sh"], check=False)
+                res = subprocess.run(
+                    ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "/eval.sh"],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                return f"{res.stdout}\n{res.stderr}".strip()
+            except subprocess.TimeoutExpired:
+                return f"Error: Tests timed out after {timeout} seconds."
+            finally:
+                if os.path.exists(temp_sh):
+                    os.remove(temp_sh)
 
     # 1. Explicit command provided
     if test_command:

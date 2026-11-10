@@ -1,4 +1,7 @@
 import argparse
+import shlex
+import sys
+from pathlib import Path
 
 from agent.loop import agent_loop
 from agent.prompts import build_mbpp_task_prompt
@@ -7,26 +10,39 @@ from mcp_client.client import MCPClient
 from models_public import MBPPTaskInput
 
 
+def _default_mcp_server_command() -> str:
+    """Return the command that starts the repository MBPP MCP server."""
+    repo_root = Path(__file__).resolve().parents[1]
+    server_path = repo_root / "mcp_tools_mbpp.py"
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(server_path))}"
+
+
 def main():
-
-    parser = argparse.ArgumentParser()
-
+    parser = argparse.ArgumentParser(
+        description="Run the Agent Smith MBPP agent."
+    )
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model-name", default="liquid/lfm-2.5-2.6b:free")
     parser.add_argument(
         "--provider-url", default="https://openrouter.ai/api/v1"
     )
+    parser.add_argument(
+        "--mcp-server",
+        default=None,
+        help="MCP server URL or command. Defaults to local mcp_tools_mbpp.py stdio server.",
+    )
 
     args = parser.parse_args()
 
-    with open(args.task_file) as f:
+    with open(args.task_file, encoding="utf-8") as f:
         # "model_validate_json": read the JSON of f. Error if something missing.
         task = MBPPTaskInput.model_validate_json(f.read())
 
     tracker = MetricsTracker(task_id=task.task_id, benchmark="mbpp")
 
-    mcp_client = MCPClient(server="python ../mcp_tools_mbpp.py")
+    server_cmd = args.mcp_server or _default_mcp_server_command()
+    mcp_client = MCPClient(server=server_cmd)
 
     try:
         answer = agent_loop(

@@ -6,6 +6,7 @@ import io
 import os
 import resource
 import signal
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -160,14 +161,22 @@ def build_namespace(
 def current_memory_bytes() -> int:
     """Return the virtual memory currently used by this process.
 
-    Reads /proc/self/statm, so it only works on Linux.
+    Reads /proc/self/statm on Linux, and falls back to resource.getrusage
+    on macOS / systems without /proc.
 
     Returns:
         The virtual memory size of the current process, in bytes.
     """
-    with open("/proc/self/statm") as f:
-        pages = int(f.read().split()[0])
-    return pages * os.sysconf("SC_PAGE_SIZE")
+    try:
+        with open("/proc/self/statm") as f:
+            pages = int(f.read().split()[0])
+        return pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError):
+        rusage = resource.getrusage(resource.RUSAGE_SELF)
+        # On macOS ru_maxrss is in bytes, on Linux ru_maxrss is in kilobytes
+        if sys.platform == "darwin":
+            return rusage.ru_maxrss
+        return rusage.ru_maxrss * 1024
 
 
 def execute(
@@ -218,9 +227,13 @@ def execute(
     signal.alarm(config.max_execution_time_seconds)  # start the timer
 
     # Allow the code max_memory_mb on top of what the process already uses
-    old_limit = resource.getrlimit(resource.RLIMIT_AS)
-    new_soft = current_memory_bytes() + config.max_memory_mb * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (new_soft, old_limit[1]))
+    old_limit = None
+    try:
+        old_limit = resource.getrlimit(resource.RLIMIT_AS)
+        new_soft = current_memory_bytes() + config.max_memory_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (new_soft, old_limit[1]))
+    except (ValueError, OSError):
+        pass
 
     network = NetworkBlocker()
     network.block()  # no network access while untrusted code runs
@@ -243,9 +256,11 @@ def execute(
         error = f"{type(e).__name__}: {e}"  # e.g. "ZeroDivisionError: division by zero"
     finally:
         signal.alarm(0)  # always stop the timer so it cannot fire later
-        resource.setrlimit(
-            resource.RLIMIT_AS, old_limit
-        )  # remove the memory limit
+        if old_limit is not None:
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, old_limit)
+            except (ValueError, OSError):
+                pass
         network.unblock()  # restore network for the agent
 
     text = output.getvalue()

@@ -13,7 +13,10 @@ from sandbox.sandbox import execute, load_config
 from .extractor import extract_code
 from .prompts import build_system_prompt
 
-load_dotenv()  # reads the .env file
+load_dotenv()  # reads the .env file from cwd
+_student_dir = Path(__file__).resolve().parents[1]
+load_dotenv(_student_dir / ".env")
+load_dotenv(_student_dir.parent / ".env")
 
 DEFAULT_SANDBOX_CONFIG_PATH = (
     Path(__file__).resolve().parents[1] / "sandbox_template.json"
@@ -27,6 +30,7 @@ def agent_loop(
     provider_url: str = "https://openrouter.ai/api/v1",
     max_iterations: int = 10,
     tracker: MetricsTracker | None = None,
+    api_key_env: str | None = None,
 ):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
@@ -47,6 +51,7 @@ def agent_loop(
         max_iterations: Maximum number of turns before giving up.
         tracker: Records the metrics of each turn, for solution.json.
             None to run without recording.
+        api_key_env: Optional environment variable name holding the API key(s).
 
     Returns:
         The answer passed to final_answer(), or None if the LLM did not
@@ -55,7 +60,7 @@ def agent_loop(
     client = LLMClient(
         provider_url,
         model_name,
-        rotator=KeyRotator.from_env("OPENROUTER_API_KEY"),
+        rotator=KeyRotator.auto_detect(provider_url, env_var=api_key_env),
     )
 
     config = load_config(str(DEFAULT_SANDBOX_CONFIG_PATH))
@@ -79,7 +84,7 @@ def agent_loop(
         )  # 1. AI gives its answer
         # Some providers ignore `stop`: the LLM then invents the Observation
         # and keeps going. Keep only the text before the first Observation.
-        content = answer.content.split("Observation:", 1)[0].rstrip()
+        content = (answer.content or "").split("Observation:", 1)[0].rstrip()
         print(f"--- Turn {turns + 1} ---\n{content}\n")
         messages.append({"role": "assistant", "content": content})
 
