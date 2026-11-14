@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 # Directories ignored by all search operations
+MAX_SEARCH_RESULTS = 50
+
 IGNORED_DIRS = {
     ".git",
     "__pycache__",
@@ -203,6 +205,7 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
 
     files = iter_codebase_files(testbed, file_pattern)
     results: list[str] = []
+    total_found = 0
 
     for file_path in files:
         abs_path = str(file_path.resolve())
@@ -210,10 +213,18 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 for lineno, line in enumerate(f, start=1):
                     if regex.search(line):
-                        content = line.rstrip("\r\n")
-                        results.append(f"{abs_path}:{lineno} {content}")
+                        total_found += 1
+                        if len(results) < MAX_SEARCH_RESULTS:
+                            content = line.rstrip("\r\n")
+                            results.append(f"{abs_path}:{lineno} {content}")
         except (OSError, PermissionError):
             continue
+
+    if total_found > MAX_SEARCH_RESULTS:
+        results.append(
+            f"... [showing first {MAX_SEARCH_RESULTS} of {total_found} matches. "
+            f"Refine your pattern or file_pattern to narrow down]"
+        )
 
     return "\n".join(results)
 
@@ -276,6 +287,14 @@ def search_function_or_class_definition_in_code(name: str) -> str:
                 content = lines[lineno - 1].rstrip("\r\n")
                 results.append(f"{abs_path}:{lineno} {content}")
 
+    if len(results) > MAX_SEARCH_RESULTS:
+        total = len(results)
+        results = results[:MAX_SEARCH_RESULTS]
+        results.append(
+            f"... [showing first {MAX_SEARCH_RESULTS} of {total} definition matches. "
+            f"Refine your query to narrow down]"
+        )
+
     return "\n".join(results)
 
 
@@ -313,5 +332,13 @@ def find_references(
                         results.append(f"{abs_path}:{lineno} {content}")
         except (OSError, PermissionError):
             continue
+
+    if len(results) > MAX_SEARCH_RESULTS:
+        total = len(results)
+        results = results[:MAX_SEARCH_RESULTS]
+        results.append(
+            f"... [showing first {MAX_SEARCH_RESULTS} of {total} reference matches. "
+            f"Refine your query to narrow down]"
+        )
 
     return "\n".join(results)

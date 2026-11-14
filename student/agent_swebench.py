@@ -1,7 +1,9 @@
 import argparse
 import os
+import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -29,6 +31,83 @@ def _looks_like_git_patch(text: str) -> bool:
 	"""
     markers = ("diff --git", "--- a/", "+++ b/", "@@")
     return bool(text.strip()) and all(marker in text for marker in markers)
+
+
+def _extract_base_commit(eval_script: str) -> str | None:
+    """Extract the base commit SHA from the eval_script.
+
+    Looks for patterns like:
+      git -c core.fileMode=false diff <sha>
+      git checkout <sha>
+    """
+    # Pattern 1: git diff <sha>
+    m = re.search(r"git\s+(?:-c\s+\S+\s+)?diff\s+([0-9a-f]{7,40})\b", eval_script)
+    if m:
+        return m.group(1)
+    # Pattern 2: git checkout <sha>
+    m = re.search(r"git\s+checkout\s+([0-9a-f]{7,40})\b", eval_script)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _clone_repo_fallback(
+    repo: str, base_commit: str | None, instance_id: str
+) -> str | None:
+    """Clone a GitHub repo and check out the base commit when Docker is unavailable.
+
+    Returns the path to the cloned testbed directory, or None on failure.
+    """
+    tmp_dir = tempfile.mkdtemp(prefix=f"swebench_{instance_id}_")
+    testbed_path = os.path.join(tmp_dir, "testbed")
+
+    github_url = f"https://github.com/{repo}.git"
+    print(f"[SWE-bench] Docker unavailable. Cloning {github_url} (shallow)...")
+
+    try:
+        # Shallow clone for speed — depth=1 at the target commit
+        if base_commit:
+            # First try a shallow fetch of the exact commit
+            subprocess.run(
+                ["git", "init", testbed_path],
+                capture_output=True, check=True,
+            )
+            subprocess.run(
+                ["git", "-C", testbed_path, "remote", "add", "origin", github_url],
+                capture_output=True, check=True,
+            )
+            res = subprocess.run(
+                ["git", "-C", testbed_path, "fetch", "--depth=1", "origin", base_commit],
+                capture_output=True, timeout=120,
+            )
+            if res.returncode == 0:
+                subprocess.run(
+                    ["git", "-C", testbed_path, "checkout", "FETCH_HEAD"],
+                    capture_output=True, check=True,
+                )
+            else:
+                # Some servers don't allow fetching by SHA — full clone fallback
+                shutil.rmtree(testbed_path, ignore_errors=True)
+                subprocess.run(
+                    ["git", "clone", "--depth=50", github_url, testbed_path],
+                    capture_output=True, check=True, timeout=180,
+                )
+                subprocess.run(
+                    ["git", "-C", testbed_path, "checkout", base_commit],
+                    capture_output=True, check=True,
+                )
+        else:
+            subprocess.run(
+                ["git", "clone", "--depth=1", github_url, testbed_path],
+                capture_output=True, check=True, timeout=180,
+            )
+
+        print(f"[SWE-bench] Repository cloned to {testbed_path}")
+        return tmp_dir
+    except Exception as e:
+        print(f"[SWE-bench] Warning: Failed to clone repository: {e}", file=sys.stderr)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
 
 
 def main() -> None:
@@ -78,14 +157,27 @@ def main() -> None:
                 )
                 docker_container.start()
                 temp_testbed_dir = tempfile.mkdtemp(prefix=f"swebench_{task.instance_id}_")
-                local_testbed = Path(temp_testbed_dir) / "testbed"
-                local_testbed.mkdir(parents=True, exist_ok=True)
                 print("[SWE-bench] Syncing /testbed from container to host workspace...")
-                docker_container.copy_from_container("/testbed", local_testbed)
-                os.environ["TESTBED_PATH"] = str(local_testbed)
+                docker_container.copy_from_container("/testbed", temp_testbed_dir)
+                local_testbed = Path(temp_testbed_dir) / "testbed"
+                if not local_testbed.exists():
+                    local_testbed = Path(temp_testbed_dir)
+                # Handle possible nested testbed/testbed if created by docker cp
+                nested = local_testbed / "testbed"
+                if nested.exists() and (nested / ".git").exists():
+                    local_testbed = nested
+                os.environ["TESTBED_PATH"] = str(local_testbed.resolve())
                 os.environ["DOCKER_CONTAINER_ID"] = docker_container.container_id
             except Exception as docker_err:
                 print(f"[SWE-bench] Warning: Failed to initialize Docker container: {docker_err}", file=sys.stderr)
+
+    # Fallback: clone the repo from GitHub when Docker is unavailable
+    if not os.environ.get("TESTBED_PATH") and task.repo:
+        base_commit = _extract_base_commit(task.eval_script) if task.eval_script else None
+        clone_dir = _clone_repo_fallback(task.repo, base_commit, task.instance_id)
+        if clone_dir:
+            temp_testbed_dir = clone_dir
+            os.environ["TESTBED_PATH"] = os.path.join(clone_dir, "testbed")
 
     if task.eval_script and not os.environ.get("EVAL_SCRIPT"):
         os.environ["EVAL_SCRIPT"] = task.eval_script

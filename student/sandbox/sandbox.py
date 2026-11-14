@@ -1,5 +1,6 @@
 """Sandbox used to execute LLM-generated code with restricted capabilities."""
 
+import ast
 import builtins
 import contextlib
 import io
@@ -39,6 +40,38 @@ FORBIDDEN_BUILTINS = (
     "credits",
     "license",
 )
+
+FORBIDDEN_ATTRS = {
+    "__subclasses__",
+    "__globals__",
+    "__builtins__",
+    "__code__",
+    "__bases__",
+    "__base__",
+    "__mro__",
+    "__func__",
+    "__closure__",
+}
+
+
+class SecurityASTValidator(ast.NodeVisitor):
+    """Enforce sandbox security rules at the AST level before code execution."""
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if node.attr in FORBIDDEN_ATTRS:
+            raise PermissionError(
+                f"Access to attribute '{node.attr}' is forbidden by sandbox security policy."
+            )
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                if node.args[1].value in FORBIDDEN_ATTRS:
+                    raise PermissionError(
+                        f"Access to attribute '{node.args[1].value}' is forbidden by sandbox security policy."
+                    )
+        self.generic_visit(node)
 
 MAX_OUTPUT_CHARS = 10_000
 
@@ -179,6 +212,64 @@ def current_memory_bytes() -> int:
         return rusage.ru_maxrss * 1024
 
 
+def _auto_print_expressions(source: str) -> str:
+    """Wrap top-level bare expressions to print their return value if not None.
+
+    Simulates REPL behavior so when the LLM writes `read_file(...)` or `search_code(...)`
+    without wrapping in print(), the result is still captured in stdout and shown in the Observation.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+
+    new_body = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Expr):
+            val = stmt.value
+            # Don't wrap if already a print(...) or final_answer(...) call
+            if isinstance(val, ast.Call):
+                func = val.func
+                if isinstance(func, ast.Name) and func.id in ("print", "final_answer"):
+                    new_body.append(stmt)
+                    continue
+
+            assign = ast.Assign(
+                targets=[ast.Name(id="__eval_result__", ctx=ast.Store())],
+                value=val,
+            )
+            ast.fix_missing_locations(assign)
+
+            check = ast.If(
+                test=ast.Compare(
+                    left=ast.Name(id="__eval_result__", ctx=ast.Load()),
+                    ops=[ast.IsNot()],
+                    comparators=[ast.Constant(value=None)],
+                ),
+                body=[
+                    ast.Expr(
+                        value=ast.Call(
+                            func=ast.Name(id="print", ctx=ast.Load()),
+                            args=[ast.Name(id="__eval_result__", ctx=ast.Load())],
+                            keywords=[],
+                        )
+                    )
+                ],
+                orelse=[],
+            )
+            ast.fix_missing_locations(check)
+            new_body.extend([assign, check])
+        else:
+            new_body.append(stmt)
+
+    tree.body = new_body
+    ast.fix_missing_locations(tree)
+    try:
+        return ast.unparse(tree)
+    except Exception:
+        return source
+
+
 def execute(
     code: str,
     config: SandboxConfig,
@@ -238,9 +329,27 @@ def execute(
     network = NetworkBlocker()
     network.block()  # no network access while untrusted code runs
 
+    # Enforce AST-level security restrictions before execution
+    try:
+        parsed_tree = ast.parse(code)
+        SecurityASTValidator().visit(parsed_tree)
+    except SyntaxError:
+        pass
+    except PermissionError as e:
+        signal.alarm(0)
+        if old_limit is not None:
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, old_limit)
+            except (ValueError, OSError):
+                pass
+        network.unblock()
+        return {"output": "", "final_answer": None, "error": f"PermissionError: {e}"}
+
+    executable_code = _auto_print_expressions(code)
+
     try:
         with contextlib.redirect_stdout(output):
-            exec(code, namespace)
+            exec(executable_code, namespace)
     except FinalAnswerException as e:
         answer = e.answer
     except MemoryError:

@@ -55,6 +55,19 @@ class TestSandboxSecurity(unittest.TestCase):
             self.assertIsNotNone(result["error"])
             self.assertIn("NameError", result["error"])
 
+    def test_dunder_escape_blocked(self):
+        # Introspection attacks attempting to reach os or builtins via dunder attributes
+        exploits = (
+            "().__class__.__base__.__subclasses__()",
+            "(lambda: 0).__globals__",
+            "getattr(int, '__subclasses__')()",
+        )
+        for exploit in exploits:
+            result = execute(exploit, self.config)
+            self.assertIsNotNone(result["error"])
+            self.assertIn("PermissionError", result["error"])
+            self.assertIn("forbidden by sandbox security policy", result["error"])
+
     def test_allowed_directories(self):
         allowed_file = self.allowed_dir / "test.txt"
         allowed_file.write_text("sandbox content")
@@ -95,6 +108,14 @@ class TestSandboxSecurity(unittest.TestCase):
         result = execute(code, self.config)
         self.assertEqual(result["final_answer"], "42")
         self.assertIsNone(result["error"])
+
+    def test_auto_print_bare_expression(self):
+        # Tools or functions returning values should be auto-printed if the LLM forgets print()
+        mock_tools = {"my_tool": lambda: "tool_output_value"}
+        code = "my_tool()"
+        result = execute(code, self.config, tools=mock_tools)
+        self.assertIsNone(result["error"])
+        self.assertIn("tool_output_value", result["output"])
 
     def test_timeout_execution(self):
         code = "while True:\n    pass"

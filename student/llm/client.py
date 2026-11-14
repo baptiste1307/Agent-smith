@@ -1,4 +1,5 @@
 import httpx
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -25,7 +26,7 @@ class LLMClient:
     model_name: str
     rotator: KeyRotator  # provides the currently used API key
     timeout_seconds: float = 60.0  # Max waiting time for HTTP request
-    max_retries: int = 5  # in case of error
+    max_retries: int = 12  # more retries to handle rate-limit waits
 
     def __post_init__(self) -> None:
         if not self.provider_url.endswith("/chat/completions"):
@@ -48,6 +49,7 @@ class LLMClient:
             "model": self.model_name,
             "messages": messages,
             "temperature": temperature,
+            "max_tokens": 1536,
         }
         if stop:
             payload["stop"] = stop
@@ -66,6 +68,35 @@ class LLMClient:
             headers=headers,
             timeout=self.timeout_seconds,
         )
+
+    @staticmethod
+    def _parse_retry_delay(response: httpx.Response) -> float:
+        """Extract the recommended wait time from a rate-limit response.
+
+        Checks (in order):
+        1. Retry-After header (seconds)
+        2. "try again in Xs" pattern in the response body
+        3. Default fallback of 60s
+        """
+        # 1. Retry-After header
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(float(retry_after), 1.0)
+            except ValueError:
+                pass
+
+        # 2. Parse delay from error message body
+        try:
+            body = response.text
+            m = re.search(r"(?:try again in|retry after)\s+(\d+(?:\.\d+)?)\s*s", body, re.IGNORECASE)
+            if m:
+                return max(float(m.group(1)), 1.0)
+        except Exception:
+            pass
+
+        # 3. Fallback
+        return 60.0
 
     def generate(
         self,
@@ -125,8 +156,22 @@ class LLMClient:
 
                 # Case quota / rate limit (429, 402): rotate key and retry
                 if response.status_code in (429, 402):
+                    num_keys = len(self.rotator.keys) if self.rotator.keys else 1
                     self.rotator.rotate_key()
-                    time.sleep(1)
+
+                    # If multiple keys are available and we haven't looped through all of them yet,
+                    # retry immediately on the next fresh key
+                    if num_keys > 1 and (attempt + 1) % num_keys != 0:
+                        print(f"[LLM] Rate limited (HTTP {response.status_code}). "
+                              f"Rotated to next key ({self.rotator.current_index + 1}/{num_keys}), retrying in 0.5s...")
+                        time.sleep(0.5)
+                        continue
+
+                    # All keys exhausted or single key: wait the cooldown specified by provider
+                    wait_secs = self._parse_retry_delay(response)
+                    print(f"[LLM] Rate limited on all keys (HTTP {response.status_code}). "
+                          f"Waiting {wait_secs:.0f}s before retry {attempt + 1}/{self.max_retries}...")
+                    time.sleep(wait_secs)
                     continue
 
                 # Server error (ex: 500)

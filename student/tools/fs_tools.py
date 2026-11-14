@@ -25,7 +25,7 @@ EXCLUDED_DIRS = {
     ".mypy_cache",
     ".tox",
 }
-MAX_RESULTS = 500
+MAX_RESULTS = 100
 
 
 def get_testbed_path() -> Path:
@@ -37,11 +37,25 @@ def get_testbed_path() -> Path:
 
 
 def resolve_path(filepath: str | Path) -> Path:
-    """Resolve a file path relative to TESTBED_PATH if not absolute."""
-    p = Path(filepath)
+    """Resolve a file path relative to TESTBED_PATH if not absolute.
+
+    If filepath starts with '/testbed', strips the '/testbed' prefix
+    and resolves relative to get_testbed_path().
+    """
+    p_str = str(filepath).strip()
+    testbed = get_testbed_path()
+
+    if p_str in ("/testbed", "/testbed/"):
+        return testbed
+
+    if p_str.startswith("/testbed/"):
+        rel = p_str[len("/testbed/") :]
+        return (testbed / rel).resolve()
+
+    p = Path(p_str)
     if p.is_absolute():
         return p.resolve()
-    return (get_testbed_path() / p).resolve()
+    return (testbed / p).resolve()
 
 
 def read_file(

@@ -2,6 +2,7 @@
 
 import os
 import socket
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -69,21 +70,23 @@ def make_safe_import(
                 f"Import of module '{name}' is not authorized by sandbox policy."
             )
 
-        # 2. When 'fromlist' is provided (e.g. 'from collections import abc'),
-        # verify that any requested submodule is also authorized
+        # 2. Delegate to original import
+        mod = original_import(name, globals, locals, fromlist, level)
+
+        # 3. When 'fromlist' is provided (e.g. 'from collections import abc'),
+        # verify that any imported submodule is also authorized
         if fromlist:
             for item in fromlist:
-                full_submodule = f"{name}.{item}"
-                # If the submodule is explicitly forbidden while parent is checked
-                if not is_import_allowed(
-                    name, authorized_imports
-                ) and not is_import_allowed(full_submodule, authorized_imports):
-                    raise ImportError(
-                        f"Import of '{full_submodule}' is not authorized by sandbox policy."
-                    )
+                if isinstance(item, str):
+                    val = getattr(mod, item, None)
+                    if isinstance(val, types.ModuleType):
+                        full_submodule = f"{name}.{item}"
+                        if not is_import_allowed(full_submodule, authorized_imports):
+                            raise ImportError(
+                                f"Import of submodule '{full_submodule}' is not authorized by sandbox policy."
+                            )
 
-        # 3. Delegate to original __import__ if all security checks pass
-        return original_import(name, globals, locals, fromlist, level)
+        return mod
 
     return safe_import
 
@@ -144,6 +147,14 @@ def make_safe_open(
             raise PermissionError(
                 "Access to arbitrary file descriptors is denied by sandbox policy."
             )
+
+        # Remap /testbed/... to host TESTBED_PATH if set
+        if isinstance(file, (str, Path)):
+            f_str = str(file).strip()
+            testbed_env = os.environ.get("TESTBED_PATH")
+            if testbed_env and (f_str in ("/testbed", "/testbed/") or f_str.startswith("/testbed/")):
+                rel = f_str[len("/testbed/") :] if f_str.startswith("/testbed/") else ""
+                file = str(Path(testbed_env) / rel)
 
         # Validate filesystem path against allowed directories
         if not is_path_allowed(file, allowed_directories):

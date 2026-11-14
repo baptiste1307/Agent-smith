@@ -29,11 +29,12 @@ def _apply_patch_to_docker(cid: str, patch: str) -> bool:
             return False
         # Reset uncommitted files first so patch applies cleanly
         subprocess.run(
-            ["docker", "exec", "-w", "/testbed", cid, "git", "checkout", "."],
+            ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "-c", "git checkout . && git clean -fd"],
             capture_output=True,
         )
         for apply_cmd in (
-            "git apply --verbose /tmp/patch.diff",
+            "git apply --whitespace=nowarn --verbose /tmp/patch.diff",
+            "git apply --3way /tmp/patch.diff",
             "git apply --verbose --reject /tmp/patch.diff",
             "patch --batch --fuzz=5 -p1 -i /tmp/patch.diff",
         ):
@@ -59,12 +60,21 @@ def get_testbed_path() -> Path:
 
 def resolve_workdir(workdir: str | Path | None = None) -> Path:
     """Resolve a working directory path, defaulting to testbed if None."""
+    testbed = get_testbed_path()
     if not workdir or str(workdir).strip() in (".", ""):
-        return get_testbed_path()
-    p = Path(workdir)
+        return testbed
+
+    w_str = str(workdir).strip()
+    if w_str in ("/testbed", "/testbed/"):
+        return testbed
+
+    if w_str.startswith("/testbed/"):
+        return (testbed / w_str[len("/testbed/") :]).resolve()
+
+    p = Path(w_str)
     if p.is_absolute():
         return p.resolve()
-    return (get_testbed_path() / p).resolve()
+    return (testbed / p).resolve()
 
 
 def run_command(
@@ -101,10 +111,13 @@ def run_command(
 
     cid = os.environ.get("DOCKER_CONTAINER_ID")
     if cid:
+        sync_warning = ""
         # Sync current changes to container before running command
         patch = get_patch()
         if patch:
-            _apply_patch_to_docker(cid, patch)
+            success = _apply_patch_to_docker(cid, patch)
+            if not success:
+                sync_warning = "Warning: Failed to sync host patch to Docker container (/tmp/patch.diff could not be applied). Command executed on unpatched code.\n"
 
         container_workdir = "/testbed"
         try:
@@ -123,7 +136,7 @@ def run_command(
             )
             return {
                 "stdout": proc.stdout,
-                "stderr": proc.stderr,
+                "stderr": (sync_warning + proc.stderr).strip(),
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired as e:
@@ -242,13 +255,16 @@ def run_tests(
 
     cid = os.environ.get("DOCKER_CONTAINER_ID")
     if cid:
+        sync_warning = ""
         patch = get_patch()
         if patch:
-            _apply_patch_to_docker(cid, patch)
+            success = _apply_patch_to_docker(cid, patch)
+            if not success:
+                sync_warning = "Warning: Failed to sync host patch to Docker container (/tmp/patch.diff could not be applied). Tests executed on unpatched code.\n"
 
         if test_command:
             cmd_result = run_command(test_command, workdir=cwd, timeout=timeout)
-            return f"{cmd_result['stdout']}\n{cmd_result['stderr']}".strip()
+            return f"{sync_warning}{cmd_result['stdout']}\n{cmd_result['stderr']}".strip()
 
         eval_script = os.environ.get("EVAL_SCRIPT")
         if eval_script and eval_script.strip():
@@ -264,7 +280,7 @@ def run_tests(
                     text=True,
                     timeout=timeout,
                 )
-                return f"{res.stdout}\n{res.stderr}".strip()
+                return f"{sync_warning}{res.stdout}\n{res.stderr}".strip()
             except subprocess.TimeoutExpired:
                 return f"Error: Tests timed out after {timeout} seconds."
             finally:

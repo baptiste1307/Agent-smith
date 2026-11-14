@@ -22,6 +22,38 @@ DEFAULT_SANDBOX_CONFIG_PATH = (
     Path(__file__).resolve().parents[1] / "sandbox_template.json"
 )
 
+
+def _prune_old_observations(
+    messages: list[dict[str, str]], keep_recent_turns: int = 3
+) -> list[dict[str, str]]:
+    """Prune verbose outputs from older turns to prevent rate limit and token bloat.
+
+    Keeps full observations for the most recent `keep_recent_turns` turns.
+    For older turns, keeps only a compact placeholder to conserve token quotas.
+    """
+    obs_indices = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "user" and "Observation:" in m.get("content", "")
+    ]
+    if len(obs_indices) <= keep_recent_turns:
+        return messages
+
+    pruned = [dict(m) for m in messages]
+    cutoff_indices = set(obs_indices[:-keep_recent_turns])
+
+    for idx in cutoff_indices:
+        content = pruned[idx]["content"]
+        lines = content.splitlines()
+        err_lines = [l for l in lines if l.startswith("Error:") and l != "Error: None"]
+        err_note = f"\n{err_lines[0]}" if err_lines else "\nError: None"
+        pruned[idx]["content"] = (
+            f"Observation:\n[Output of earlier turn omitted to keep context compact]{err_note}"
+        )
+
+    return pruned
+
+
 def agent_loop(
     exercice: str,
     mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
@@ -78,8 +110,9 @@ def agent_loop(
         tracker.system_prompt = system_prompt
 
     for turns in range(max_iterations):  # max turns
+        prompt_messages = _prune_old_observations(messages)
         answer = client.generate(
-            messages,
+            prompt_messages,
             stop=["Observation:"],
         )  # 1. AI gives its answer
         # Some providers ignore `stop`: the LLM then invents the Observation
@@ -111,7 +144,13 @@ def agent_loop(
             return result["final_answer"]
 
         # 5. show result to AI as text
-        observation = f"Observation:\nOutput:\n{result['output']}\nError: {result['error']}"
+        raw_output = result["output"] or ""
+        if len(raw_output) > 4000:
+            raw_output = (
+                raw_output[:4000]
+                + f"\n... [output truncated: showing first 4000 of {len(result['output'])} characters to save tokens]"
+            )
+        observation = f"Observation:\nOutput:\n{raw_output}\nError: {result['error']}"
         if warning is not None:  # the code block was malformed
             observation = f"{warning}\n{observation}"
         print(observation)

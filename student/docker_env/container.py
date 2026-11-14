@@ -115,9 +115,14 @@ class DockerContainer:
         if self.is_image_present():
             return True
 
+        pull_cmd = ["docker", "pull"]
+        if "x86_64" in self.image_name or sys.platform == "darwin":
+            pull_cmd.extend(["--platform", "linux/amd64"])
+        pull_cmd.append(self.image_name)
+
         try:
             res = subprocess.run(
-                ["docker", "pull", self.image_name],
+                pull_cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -147,13 +152,17 @@ class DockerContainer:
             "docker",
             "run",
             "-d",
+        ]
+        if "x86_64" in self.image_name or sys.platform == "darwin":
+            cmd.extend(["--platform", "linux/amd64"])
+        cmd.extend([
             "--name",
             self.container_name,
             self.image_name,
             "tail",
             "-f",
             "/dev/null",
-        ]
+        ])
 
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
