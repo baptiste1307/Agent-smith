@@ -30,7 +30,9 @@ class TestExecTools(unittest.TestCase):
         self.assertEqual(res["stderr"], "")
 
     def test_run_command_failure(self):
-        res = run_command("python3 -c 'import sys; sys.exit(7)'", workdir=self.temp_dir)
+        res = run_command(
+            "python3 -c 'import sys; sys.exit(7)'", workdir=self.temp_dir
+        )
         self.assertEqual(res["exit_code"], 7)
 
     def test_run_command_workdir(self):
@@ -41,7 +43,11 @@ class TestExecTools(unittest.TestCase):
         self.assertIn("subdir", res["stdout"])
 
     def test_run_command_timeout(self):
-        res = run_command("python3 -c 'import time; time.sleep(5)'", workdir=self.temp_dir, timeout=0.3)
+        res = run_command(
+            "python3 -c 'import time; time.sleep(5)'",
+            workdir=self.temp_dir,
+            timeout=0.3,
+        )
         self.assertEqual(res["exit_code"], 124)
         self.assertIn("timed out", res["stderr"].lower())
 
@@ -50,14 +56,24 @@ class TestExecTools(unittest.TestCase):
         repo_dir.mkdir()
 
         # Initialize git repo
-        subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo_dir, check=True)
-        subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo_dir, check=True)
+        subprocess.run(
+            ["git", "init"], cwd=repo_dir, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo_dir,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Tester"], cwd=repo_dir, check=True
+        )
 
         target_file = repo_dir / "code.py"
         target_file.write_text("def solve():\n    return 1\n")
         subprocess.run(["git", "add", "code.py"], cwd=repo_dir, check=True)
-        subprocess.run(["git", "commit", "-m", "init"], cwd=repo_dir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"], cwd=repo_dir, check=True
+        )
 
         # Before edits, patch should be empty
         empty_patch = get_patch(repo_dir)
@@ -74,14 +90,18 @@ class TestExecTools(unittest.TestCase):
 
     def test_run_tests_with_eval_sh(self):
         eval_script = self.temp_dir / "eval.sh"
-        eval_script.write_text("#!/bin/bash\necho 'ALL UNIT TESTS PASSED'\nexit 0\n")
+        eval_script.write_text(
+            "#!/bin/bash\necho 'ALL UNIT TESTS PASSED'\nexit 0\n"
+        )
         eval_script.chmod(0o755)
 
         output = run_tests(workdir=self.temp_dir)
         self.assertIn("ALL UNIT TESTS PASSED", output)
 
     def test_run_tests_explicit_command(self):
-        output = run_tests(test_command="echo 'Explicit Test Output'", workdir=self.temp_dir)
+        output = run_tests(
+            test_command="echo 'Explicit Test Output'", workdir=self.temp_dir
+        )
         self.assertIn("Explicit Test Output", output)
 
 

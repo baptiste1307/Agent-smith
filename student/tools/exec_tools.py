@@ -5,7 +5,7 @@ Implements the mandatory execution tools specified in Section V.5.3:
 - get_patch()
 - run_command(command, workdir)
 
-All commands and patch generations run in the repository located at TESTBED_PATH.
+All commands and patch generation run in repository at TESTBED_PATH.
 """
 
 import os
@@ -14,8 +14,13 @@ from pathlib import Path
 from typing import Any
 
 
-def _write_file_to_docker(cid: str, host_file: Path, container_file: str) -> bool:
-    """Write a host file into a container via stdin (avoids rootless Docker lchown errors)."""
+def _write_file_to_docker(
+    cid: str, host_file: Path, container_file: str
+) -> bool:
+    """Write a host file into a container via stdin.
+
+    Avoids rootless Docker lchown errors.
+    """
     parent_dir = str(Path(container_file).parent)
     subprocess.run(
         ["docker", "exec", cid, "mkdir", "-p", parent_dir],
@@ -24,7 +29,17 @@ def _write_file_to_docker(cid: str, host_file: Path, container_file: str) -> boo
     )
     data = host_file.read_bytes()
     res = subprocess.run(
-        ["docker", "exec", "-i", cid, "/bin/sh", "-c", 'cat > "$1"', "_", container_file],
+        [
+            "docker",
+            "exec",
+            "-i",
+            cid,
+            "/bin/sh",
+            "-c",
+            'cat > "$1"',
+            "_",
+            container_file,
+        ],
         input=data,
         capture_output=True,
         timeout=30,
@@ -33,13 +48,15 @@ def _write_file_to_docker(cid: str, host_file: Path, container_file: str) -> boo
 
 
 def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
-    """Sync modified files from host testbed into /testbed inside a running container.
+    """Sync modified files from host testbed into /testbed in a container.
 
-    Streams modified files via `docker exec -i` after resetting the container's
-    working tree, avoiding both `git apply` and rootless Docker `lchown` failures.
+    Streams modified files via `docker exec -i` after resetting the
+    container's working tree, avoiding `git apply` and rootless Docker
+    `lchown` failures.
     """
     try:
-        # Reset container working tree cleanly (mark /testbed safe first for newer git)
+        # Reset container working tree cleanly (mark /testbed safe first for
+        # newer git)
         subprocess.run(
             [
                 "docker",
@@ -49,7 +66,10 @@ def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
                 cid,
                 "/bin/bash",
                 "-c",
-                "git config --global --add safe.directory /testbed 2>/dev/null || true; git checkout -- . && git clean -fd",
+                (
+                    "git config --global --add safe.directory /testbed "
+                    "2>/dev/null || true; git checkout -- . && git clean -fd"
+                ),
             ],
             capture_output=True,
             timeout=30,
@@ -57,7 +77,14 @@ def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
 
         # Find modified tracked files (unstaged + staged)
         res = subprocess.run(
-            ["git", "-c", "core.fileMode=false", "diff", "--name-only", "HEAD"],
+            [
+                "git",
+                "-c",
+                "core.fileMode=false",
+                "diff",
+                "--name-only",
+                "HEAD",
+            ],
             cwd=testbed,
             capture_output=True,
             text=True,
@@ -75,7 +102,9 @@ def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
                 timeout=30,
             )
             changed_files = [
-                line.strip() for line in res2.stdout.splitlines() if line.strip()
+                line.strip()
+                for line in res2.stdout.splitlines()
+                if line.strip()
             ]
 
         for rel_path in changed_files:
@@ -97,7 +126,7 @@ def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
 
 
 def get_testbed_path() -> Path:
-    """Return the repository root from TESTBED_PATH, defaulting to current working dir."""
+    """Return repository root from TESTBED_PATH or current working dir."""
     testbed_env = os.environ.get("TESTBED_PATH")
     if testbed_env:
         return Path(testbed_env).resolve()
@@ -115,7 +144,7 @@ def resolve_workdir(workdir: str | Path | None = None) -> Path:
         return testbed
 
     if w_str.startswith("/testbed/"):
-        return (testbed / w_str[len("/testbed/") :]).resolve()
+        return (testbed / w_str[len("/testbed/"):]).resolve()
 
     p = Path(w_str)
     if p.is_absolute():
@@ -132,14 +161,18 @@ def run_command(
 
     Args:
         command: Shell command string to execute.
-        workdir: Working directory in which to execute (defaults to TESTBED_PATH).
-        timeout: Maximum execution time in seconds before timeout (default: 120s).
+        workdir: Working directory for execution (defaults to TESTBED_PATH).
+        timeout: Maximum execution time in seconds (default: 120s).
 
     Returns:
         A dict containing 'stdout', 'stderr', and 'exit_code'.
     """
     if not command or not command.strip():
-        return {"stdout": "", "stderr": "Error: Command cannot be empty.", "exit_code": 1}
+        return {
+            "stdout": "",
+            "stderr": "Error: Command cannot be empty.",
+            "exit_code": 1,
+        }
 
     cwd = resolve_workdir(workdir)
     if not cwd.exists():
@@ -163,16 +196,30 @@ def run_command(
         if patch:
             success = _sync_host_changes_to_docker(cid, get_testbed_path())
             if not success:
-                sync_warning = "Warning: Failed to sync host edits to Docker container. Command executed on unpatched code.\n"
+                sync_warning = (
+                    "Warning: Failed to sync host edits to Docker container. "
+                    "Command executed on unpatched code.\n"
+                )
 
         container_workdir = "/testbed"
         try:
             rel = cwd.relative_to(get_testbed_path())
-            container_workdir = f"/testbed/{rel}" if str(rel) != "." else "/testbed"
+            container_workdir = (
+                f"/testbed/{rel}" if str(rel) != "." else "/testbed"
+            )
         except ValueError:
             container_workdir = "/testbed"
 
-        cmd = ["docker", "exec", "-w", container_workdir, cid, "/bin/bash", "-c", command]
+        cmd = [
+            "docker",
+            "exec",
+            "-w",
+            container_workdir,
+            cid,
+            "/bin/bash",
+            "-c",
+            command,
+        ]
         try:
             proc = subprocess.run(
                 cmd,
@@ -186,8 +233,16 @@ def run_command(
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired as e:
-            stdout = e.stdout if isinstance(e.stdout, str) else (e.stdout.decode() if e.stdout else "")
-            stderr = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode() if e.stderr else "")
+            stdout = (
+                e.stdout
+                if isinstance(e.stdout, str)
+                else (e.stdout.decode() if e.stdout else "")
+            )
+            stderr = (
+                e.stderr
+                if isinstance(e.stderr, str)
+                else (e.stderr.decode() if e.stderr else "")
+            )
             timeout_msg = f"\nCommand timed out after {timeout} seconds."
             return {
                 "stdout": stdout,
@@ -216,8 +271,16 @@ def run_command(
             "exit_code": proc.returncode,
         }
     except subprocess.TimeoutExpired as e:
-        stdout = e.stdout if isinstance(e.stdout, str) else (e.stdout.decode() if e.stdout else "")
-        stderr = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode() if e.stderr else "")
+        stdout = (
+            e.stdout
+            if isinstance(e.stdout, str)
+            else (e.stdout.decode() if e.stdout else "")
+        )
+        stderr = (
+            e.stderr
+            if isinstance(e.stderr, str)
+            else (e.stderr.decode() if e.stderr else "")
+        )
         timeout_msg = f"\nCommand timed out after {timeout} seconds."
         return {
             "stdout": stdout,
@@ -258,7 +321,8 @@ def get_patch(repo_path: str | Path | None = None) -> str:
         )
         diff_output = res.stdout
 
-        # 2. If empty, check staged changes or diff against HEAD in case 'git add' was run
+        # 2. If empty, check staged changes or diff against HEAD in case 'git
+        # add' was run
         if not diff_output.strip():
             res_head = subprocess.run(
                 ["git", "-c", "core.fileMode=false", "diff", "HEAD"],
@@ -306,23 +370,47 @@ def run_tests(
         if patch:
             success = _sync_host_changes_to_docker(cid, get_testbed_path())
             if not success:
-                sync_warning = "Warning: Failed to sync host edits to Docker container. Tests executed on unpatched code.\n"
+                sync_warning = (
+                    "Warning: Failed to sync host edits to Docker container. "
+                    "Tests executed on unpatched code.\n"
+                )
 
         if test_command:
-            cmd_result = run_command(test_command, workdir=cwd, timeout=timeout)
-            return f"{sync_warning}{cmd_result['stdout']}\n{cmd_result['stderr']}".strip()
+            cmd_result = run_command(
+                test_command, workdir=cwd, timeout=timeout
+            )
+            return (
+                f"{sync_warning}{cmd_result['stdout']}\n"
+                f"{cmd_result['stderr']}"
+            ).strip()
 
         eval_script = os.environ.get("EVAL_SCRIPT")
         if eval_script and eval_script.strip():
             try:
                 subprocess.run(
-                    ["docker", "exec", "-i", cid, "/bin/sh", "-c", "cat > /eval.sh && chmod +x /eval.sh"],
+                    [
+                        "docker",
+                        "exec",
+                        "-i",
+                        cid,
+                        "/bin/sh",
+                        "-c",
+                        "cat > /eval.sh && chmod +x /eval.sh",
+                    ],
                     input=eval_script.encode("utf-8"),
                     capture_output=True,
                     timeout=30,
                 )
                 res = subprocess.run(
-                    ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "/eval.sh"],
+                    [
+                        "docker",
+                        "exec",
+                        "-w",
+                        "/testbed",
+                        cid,
+                        "/bin/bash",
+                        "/eval.sh",
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=timeout,
@@ -343,7 +431,9 @@ def run_tests(
     env_script_path = os.environ.get("EVAL_SCRIPT_PATH")
     if env_script_path and Path(env_script_path).exists():
         script_file = Path(env_script_path).resolve()
-        cmd_result = run_command(f"/bin/bash {script_file}", workdir=cwd, timeout=timeout)
+        cmd_result = run_command(
+            f"/bin/bash {script_file}", workdir=cwd, timeout=timeout
+        )
         return (f"{cmd_result['stdout']}\n{cmd_result['stderr']}").strip()
 
     # 3. Check standard locations for eval.sh
@@ -355,7 +445,9 @@ def run_tests(
 
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
-            cmd_result = run_command(f"/bin/bash {candidate}", workdir=cwd, timeout=timeout)
+            cmd_result = run_command(
+                f"/bin/bash {candidate}", workdir=cwd, timeout=timeout
+            )
             return (f"{cmd_result['stdout']}\n{cmd_result['stderr']}").strip()
 
     # 4. Check for eval script content in environment variable
@@ -364,7 +456,9 @@ def run_tests(
         tmp_script = Path("/tmp/agent_eval_script.sh")
         try:
             tmp_script.write_text(eval_script_content, encoding="utf-8")
-            cmd_result = run_command(f"/bin/bash {tmp_script}", workdir=cwd, timeout=timeout)
+            cmd_result = run_command(
+                f"/bin/bash {tmp_script}", workdir=cwd, timeout=timeout
+            )
             return (f"{cmd_result['stdout']}\n{cmd_result['stderr']}").strip()
         finally:
             if tmp_script.exists():
@@ -375,4 +469,8 @@ def run_tests(
     if cmd_result["exit_code"] != 127:  # 127 = command not found
         return (f"{cmd_result['stdout']}\n{cmd_result['stderr']}").strip()
 
-    return "Error: No evaluation script found (checked /eval.sh, EVAL_SCRIPT_PATH, eval.sh) and pytest is unavailable."
+    return (
+        "Error: No evaluation script found "
+        "(checked /eval.sh, EVAL_SCRIPT_PATH, eval.sh) "
+        "and pytest is unavailable."
+    )

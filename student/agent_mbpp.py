@@ -24,19 +24,20 @@ def main():
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model-name", default="codestral-latest")
-    parser.add_argument(
-        "--provider-url", default="https://api.mistral.ai/v1"
-    )
+    parser.add_argument("--provider-url", default="https://api.mistral.ai/v1")
     parser.add_argument(
         "--mcp-server",
         default=None,
-        help="MCP server URL or command. Defaults to local mcp_tools_mbpp.py stdio server.",
+        help=(
+            "MCP server URL or command. Defaults to local "
+            "mcp_tools_mbpp.py stdio server."
+        ),
     )
 
     args = parser.parse_args()
 
     with open(args.task_file, encoding="utf-8") as f:
-        # "model_validate_json": read the JSON of f. Error if something missing.
+        # model_validate_json reads JSON and validates required fields.
         task = MBPPTaskInput.model_validate_json(f.read())
 
     tracker = MetricsTracker(task_id=task.task_id, benchmark="mbpp")

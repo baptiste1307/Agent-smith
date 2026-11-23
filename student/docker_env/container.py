@@ -34,12 +34,18 @@ class DockerContainer:
         """Initialize the Docker container manager.
 
         Args:
-            image_name: Docker image name on DockerHub (e.g. swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest).
+            image_name: Docker image name on DockerHub
+                (e.g. swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest).
             container_name: Optional explicit name for the container.
-            auto_cleanup: If True, registers process exit hooks to delete the container.
+            auto_cleanup: If True, registers process exit hooks to delete
+                the container.
         """
         self.image_name = image_name
-        safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", container_name or f"agent_swe_{int(time.time())}")
+        safe_name = re.sub(
+            r"[^a-zA-Z0-9_.-]",
+            "_",
+            container_name or f"agent_swe_{int(time.time())}",
+        )
         self.container_name = safe_name
         self.container_id: str | None = None
         self.auto_cleanup = auto_cleanup
@@ -50,7 +56,7 @@ class DockerContainer:
 
     @classmethod
     def _register_global_cleanup(cls) -> None:
-        """Register signal and exit handlers once to clean up running containers."""
+        """Register signal and exit handlers once."""
         if cls._cleanup_registered:
             return
 
@@ -136,15 +142,19 @@ class DockerContainer:
             The started container ID.
 
         Raises:
-            RuntimeError: If Docker is unavailable or the container fails to start.
+            RuntimeError: If Docker is unavailable or start fails.
         """
         if not self.is_docker_available():
-            raise RuntimeError("Docker daemon is not running or not accessible.")
+            raise RuntimeError(
+                "Docker daemon is not running or not accessible."
+            )
 
         if pull_if_missing and not self.is_image_present():
             pulled = self.pull_image()
             if not pulled:
-                raise RuntimeError(f"Failed to pull Docker image: {self.image_name}")
+                raise RuntimeError(
+                    f"Failed to pull Docker image: {self.image_name}"
+                )
 
         cmd = [
             "docker",
@@ -153,18 +163,23 @@ class DockerContainer:
         ]
         if "x86_64" in self.image_name or sys.platform == "darwin":
             cmd.extend(["--platform", "linux/amd64"])
-        cmd.extend([
-            "--name",
-            self.container_name,
-            self.image_name,
-            "tail",
-            "-f",
-            "/dev/null",
-        ])
+        cmd.extend(
+            [
+                "--name",
+                self.container_name,
+                self.image_name,
+                "tail",
+                "-f",
+                "/dev/null",
+            ]
+        )
 
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
-            raise RuntimeError(f"Failed to start container '{self.container_name}': {res.stderr}")
+            raise RuntimeError(
+                f"Failed to start container '{self.container_name}': "
+                f"{res.stderr}"
+            )
 
         cid = res.stdout.strip()
         self.container_id = cid
@@ -212,11 +227,25 @@ class DockerContainer:
             )
             return res.returncode, res.stdout, res.stderr
         except subprocess.TimeoutExpired as e:
-            stdout = e.stdout if isinstance(e.stdout, str) else (e.stdout.decode() if e.stdout else "")
-            stderr = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode() if e.stderr else "")
-            return 124, stdout, f"{stderr}\nCommand timed out after {timeout} seconds."
+            stdout = (
+                e.stdout
+                if isinstance(e.stdout, str)
+                else (e.stdout.decode() if e.stdout else "")
+            )
+            stderr = (
+                e.stderr
+                if isinstance(e.stderr, str)
+                else (e.stderr.decode() if e.stderr else "")
+            )
+            return (
+                124,
+                stdout,
+                f"{stderr}\nCommand timed out after {timeout} seconds.",
+            )
 
-    def copy_from_container(self, container_path: str, host_path: str | Path) -> bool:
+    def copy_from_container(
+        self, container_path: str, host_path: str | Path
+    ) -> bool:
         """Copy files or directories from the container to the host."""
         if not self.container_id:
             raise RuntimeError("Container is not running.")
@@ -226,11 +255,13 @@ class DockerContainer:
         res = subprocess.run(cmd, capture_output=True, timeout=60)
         return res.returncode == 0
 
-    def copy_to_container(self, host_path: str | Path, container_path: str) -> bool:
+    def copy_to_container(
+        self, host_path: str | Path, container_path: str
+    ) -> bool:
         """Copy a file or directory from host into the container.
 
-        For regular files, streams bytes via `docker exec -i` to avoid rootless
-        Docker `lchown` errors when the host UID exceeds the container's subuid range.
+        For regular files, streams bytes via `docker exec -i` to avoid
+        rootless Docker `lchown` errors when host UID exceeds subuid range.
         """
         if not self.container_id:
             raise RuntimeError("Container is not running.")
@@ -256,7 +287,12 @@ class DockerContainer:
             )
             return res.returncode == 0
 
-        cmd = ["docker", "cp", str(src_path), f"{self.container_id}:{container_path}"]
+        cmd = [
+            "docker",
+            "cp",
+            str(src_path),
+            f"{self.container_id}:{container_path}",
+        ]
         res = subprocess.run(cmd, capture_output=True, timeout=60)
         return res.returncode == 0
 
@@ -265,7 +301,9 @@ class DockerContainer:
         if not patch or not patch.strip():
             return False
 
-        with tempfile.NamedTemporaryFile("w", suffix=".diff", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".diff", delete=False
+        ) as f:
             f.write(patch)
             temp_patch = f.name
 
@@ -288,7 +326,9 @@ class DockerContainer:
             if os.path.exists(temp_patch):
                 os.remove(temp_patch)
 
-    def run_eval_script(self, script_content: str, timeout: float = 300.0) -> tuple[int, str]:
+    def run_eval_script(
+        self, script_content: str, timeout: float = 300.0
+    ) -> tuple[int, str]:
         """Execute an eval script inside the container and return output."""
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
             f.write(script_content)
@@ -334,4 +374,3 @@ class DockerContainer:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.stop()
-

@@ -30,7 +30,7 @@ MAX_RESULTS = 100
 
 
 def get_testbed_path() -> Path:
-    """Return repository root from TESTBED_PATH, defaulting to current working dir."""
+    """Return repository root from TESTBED_PATH or current working dir."""
     testbed_env = os.environ.get("TESTBED_PATH")
     if testbed_env:
         return Path(testbed_env).resolve()
@@ -50,7 +50,7 @@ def resolve_path(filepath: str | Path) -> Path:
         return testbed
 
     if p_str.startswith("/testbed/"):
-        rel = p_str[len("/testbed/") :]
+        rel = p_str[len("/testbed/"):]
         return (testbed / rel).resolve()
 
     p = Path(p_str)
@@ -67,7 +67,8 @@ def read_file(
     Args:
         filepath: Path to the target file.
         start_line: 1-indexed starting line number (default: 1).
-        end_line: 1-indexed ending line number (default: -1, reads to end of file).
+        end_line: 1-indexed ending line number
+            (default: -1, reads to end of file).
 
     Returns:
         Formatted string:
@@ -98,7 +99,8 @@ def read_file(
 
     if start_line > total_lines:
         return (
-            f"Error: start_line ({start_line}) is greater than total lines ({total_lines})."
+            f"Error: start_line ({start_line}) is greater than total lines "
+            f"({total_lines})."
         )
 
     # If end_line is -1, cap to 200 lines from start_line to avoid token bloat
@@ -116,7 +118,10 @@ def read_file(
         actual_end = end_line
 
     if actual_end < start_line:
-        return f"Error: end_line ({actual_end}) is before start_line ({start_line})."
+        return (
+            f"Error: end_line ({actual_end}) is before start_line "
+            f"({start_line})."
+        )
 
     output = []
     for lineno in range(start_line, actual_end + 1):
@@ -178,14 +183,16 @@ def edit_file(filepath: str | Path, old_str: str, new_str: str) -> str:
     except Exception as e:
         return f"Error writing to '{filepath}': {e}"
 
-    # Explicit syntax feedback for Python files (required by subject Section V.1)
+    # Explicit syntax feedback for Python files (required by subject Section
+    # V.1)
     if path.suffix == ".py":
         try:
             ast.parse(updated, filename=str(path))
         except SyntaxError as e:
             return (
-                f"File '{filepath}' updated, WARNING: edit introduced a Python "
-                f"SyntaxError at line {e.lineno}: {e.msg}. Please fix it."
+                f"File '{filepath}' updated: edit introduced a Python "
+                f"SyntaxError at line {e.lineno}: {e.msg}."
+                " Please fix it."
             )
 
     return f"File '{filepath}' updated successfully."
@@ -199,7 +206,7 @@ def list_files(directory: str | Path = ".", pattern: str = "*") -> str:
         pattern: Shell-style glob pattern (e.g. '*.py', default: '*').
 
     Returns:
-        Sorted list of absolute paths matching the pattern, separated by newlines.
+        Sorted list of absolute paths matching the pattern.
     """
     dir_path = resolve_path(directory)
 
@@ -233,7 +240,8 @@ def list_files(directory: str | Path = ".", pattern: str = "*") -> str:
         output = [str(p) for p in matched]
         if truncated:
             output.append(
-                f"... (truncated: showing {MAX_RESULTS} of {total_count} files)"
+                f"... (truncated: showing {MAX_RESULTS} of "
+                f"{total_count} files)"
             )
 
         return "\n".join(output)

@@ -17,7 +17,7 @@ def is_import_allowed(name: str, authorized_imports: list[str]) -> bool:
        AND all its submodules such as "collections.abc")
 
     Args:
-        name: The full name of the module to import (e.g. 'math', 'collections.abc').
+        name: Full module name (e.g. 'math', 'collections.abc').
         authorized_imports: List of authorized import patterns.
 
     Returns:
@@ -32,7 +32,8 @@ def is_import_allowed(name: str, authorized_imports: list[str]) -> bool:
         elif authorized.endswith(".*"):
             # Strip the trailing '.*' to get the base module name
             base = authorized[:-2]
-            # Allow the base module itself ('collections') or any submodule ('collections.abc')
+            # Allow the base module itself ('collections') or any submodule
+            # ('collections.abc')
             if name == base or name.startswith(base + "."):
                 return True
 
@@ -67,7 +68,8 @@ def make_safe_import(
         # 1. Verify that the requested top-level module is authorized
         if not is_import_allowed(name, authorized_imports):
             raise ImportError(
-                f"Import of module '{name}' is not authorized by sandbox policy."
+                f"Import of module '{name}' is not authorized by sandbox "
+                "policy."
             )
 
         # 2. Delegate to original import
@@ -81,9 +83,13 @@ def make_safe_import(
                     val = getattr(mod, item, None)
                     if isinstance(val, types.ModuleType):
                         full_submodule = f"{name}.{item}"
-                        if not is_import_allowed(full_submodule, authorized_imports):
+                        if not is_import_allowed(
+                            full_submodule, authorized_imports
+                        ):
                             raise ImportError(
-                                f"Import of submodule '{full_submodule}' is not authorized by sandbox policy."
+                                "Import of submodule "
+                                f"'{full_submodule}' is not authorized by "
+                                "sandbox policy."
                             )
 
         return mod
@@ -104,7 +110,7 @@ def is_path_allowed(
         allowed_directories: List of authorized directory paths.
 
     Returns:
-        True if the path is inside (or is) an allowed directory, False otherwise.
+        True if path is inside (or is) an allowed directory, else False.
     """
     if not allowed_directories:
         return False
@@ -113,7 +119,8 @@ def is_path_allowed(
         real_target = os.path.realpath(os.path.abspath(str(filepath)))
         for allowed in allowed_directories:
             real_allowed = os.path.realpath(os.path.abspath(str(allowed)))
-            # Target must either be the directory itself or a child path inside it
+            # Target must either be the directory itself or a child path inside
+            # it
             if real_target == real_allowed or real_target.startswith(
                 real_allowed.rstrip(os.sep) + os.sep
             ):
@@ -145,20 +152,29 @@ def make_safe_open(
             if file in (0, 1, 2):
                 return original_open(file, *args, **kwargs)
             raise PermissionError(
-                "Access to arbitrary file descriptors is denied by sandbox policy."
+                "Access to arbitrary file descriptors "
+                "is denied by sandbox policy."
             )
 
-        # Remap /testbed/... to host TESTBED_PATH if set and /testbed is allowed
+        # Remap /testbed/... to host TESTBED_PATH if set and /testbed is
+        # allowed
         effective_allowed = list(allowed_directories)
         if isinstance(file, (str, Path)):
             f_str = str(file).strip()
             testbed_env = os.environ.get("TESTBED_PATH")
-            if testbed_env and is_path_allowed("/testbed", allowed_directories):
+            if testbed_env and is_path_allowed(
+                "/testbed", allowed_directories
+            ):
                 effective_allowed.append(testbed_env)
             if testbed_env and (
-                f_str in ("/testbed", "/testbed/") or f_str.startswith("/testbed/")
+                f_str in ("/testbed", "/testbed/")
+                or f_str.startswith("/testbed/")
             ):
-                rel = f_str[len("/testbed/") :] if f_str.startswith("/testbed/") else ""
+                rel = (
+                    f_str[len("/testbed/"):]
+                    if f_str.startswith("/testbed/")
+                    else ""
+                )
                 file = str(Path(testbed_env) / rel)
 
         # Validate filesystem path against allowed directories
@@ -202,14 +218,14 @@ class NetworkBlocker:
     """Temporarily disables network socket creation during sandbox execution.
 
     Why temporary blocking is needed:
-    1. The main agent interacts with LLM APIs over the Internet (network active).
-    2. Just before executing untrusted LLM-generated code: block the network (block()).
-    3. The LLM code executes in isolation (cannot cheat, exfiltrate data, or fetch solutions).
-    4. Once execution finishes: restore the network (unblock()) so the agent can resume LLM calls.
+    1. The main agent interacts with LLM APIs over the Internet.
+    2. Before untrusted LLM code execution: block network (block()).
+    3. LLM code executes in isolation.
+    4. After execution: restore network (unblock()).
     """
 
     def __init__(self) -> None:
-        self._orig_socket = socket.socket
+        self._orig_socket: Any = socket.socket
         self._orig_create_connection = getattr(
             socket, "create_connection", None
         )
@@ -225,24 +241,28 @@ class NetworkBlocker:
                 "Network access is disabled by sandbox policy."
             )
 
-        socket.socket = disabled_socket  # type: ignore[misc]
+        socket.socket = disabled_socket  # type: ignore[misc,assignment]
         if self._orig_create_connection:
-            socket.create_connection = disabled_socket  # type: ignore[misc]
+            # type: ignore[assignment]
+            socket.create_connection = disabled_socket
         if self._orig_getaddrinfo:
-            socket.getaddrinfo = disabled_socket  # type: ignore[misc]
+            socket.getaddrinfo = disabled_socket  # type: ignore[assignment]
         if self._orig_socketpair:
-            socket.socketpair = disabled_socket  # type: ignore[misc]
+            socket.socketpair = disabled_socket  # type: ignore[assignment]
         if self._orig_fromfd:
-            socket.fromfd = disabled_socket  # type: ignore[misc]
+            socket.fromfd = disabled_socket  # type: ignore[assignment]
 
     def unblock(self) -> None:
         """Restore original socket functions."""
-        socket.socket = self._orig_socket  # type: ignore[misc]
+        socket.socket = self._orig_socket  # type: ignore[misc,assignment]
         if self._orig_create_connection:
-            socket.create_connection = self._orig_create_connection  # type: ignore[misc]
+            # type: ignore[misc]
+            socket.create_connection = self._orig_create_connection
         if self._orig_getaddrinfo:
-            socket.getaddrinfo = self._orig_getaddrinfo  # type: ignore[misc]
+            # type: ignore[assignment]
+            socket.getaddrinfo = self._orig_getaddrinfo
         if self._orig_socketpair:
-            socket.socketpair = self._orig_socketpair  # type: ignore[misc]
+            # type: ignore[assignment]
+            socket.socketpair = self._orig_socketpair
         if self._orig_fromfd:
-            socket.fromfd = self._orig_fromfd  # type: ignore[misc]
+            socket.fromfd = self._orig_fromfd  # type: ignore[assignment]

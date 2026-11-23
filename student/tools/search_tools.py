@@ -103,7 +103,7 @@ BINARY_EXTENSIONS = {
 
 
 def get_testbed_path() -> Path:
-    """Return the repository root from TESTBED_PATH, defaulting to current working directory.
+    """Return repository root from TESTBED_PATH or current working directory.
 
     During SWE-bench evaluation and isolation testing, the moulinette sets
     TESTBED_PATH to point to the repository root.
@@ -131,7 +131,7 @@ def is_binary_file(path: Path) -> bool:
 def iter_codebase_files(
     testbed: Path, file_pattern: str | None = None
 ) -> list[Path]:
-    """Discover all non-binary, non-ignored files matching an optional file_pattern.
+    """Discover non-binary, non-ignored files matching an optional pattern.
 
     Args:
         testbed: Root directory of the repository.
@@ -147,9 +147,7 @@ def iter_codebase_files(
     for root, dirs, files in os.walk(testbed, topdown=True, followlinks=False):
         # Prune ignored and hidden directories
         dirs[:] = [
-            d
-            for d in dirs
-            if d not in IGNORED_DIRS and not d.startswith(".")
+            d for d in dirs if d not in IGNORED_DIRS and not d.startswith(".")
         ]
 
         root_path = Path(root)
@@ -187,7 +185,8 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
 
     Args:
         pattern: Regex pattern or literal string to search for.
-        file_pattern: Optional file glob pattern to filter searched files (e.g. '*.py').
+        file_pattern: Optional file glob pattern to filter searched files
+            (e.g. '*.py').
 
     Returns:
         Formatted string of matching lines:
@@ -221,7 +220,8 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
 
     if total_found > MAX_SEARCH_RESULTS:
         results.append(
-            f"... [showing first {MAX_SEARCH_RESULTS} of {total_found} matches. "
+            f"... [showing first {MAX_SEARCH_RESULTS} of "
+            f"{total_found} matches. "
             f"Refine your pattern or file_pattern to narrow down]"
         )
 
@@ -290,7 +290,8 @@ def search_function_or_class_definition_in_code(name: str) -> str:
         total = len(results)
         results = results[:MAX_SEARCH_RESULTS]
         results.append(
-            f"... [showing first {MAX_SEARCH_RESULTS} of {total} definition matches. "
+            f"... [showing first {MAX_SEARCH_RESULTS} of "
+            f"{total} definition matches. "
             f"Refine your query to narrow down]"
         )
 
@@ -336,7 +337,8 @@ def find_references(
         total = len(results)
         results = results[:MAX_SEARCH_RESULTS]
         results.append(
-            f"... [showing first {MAX_SEARCH_RESULTS} of {total} reference matches. "
+            f"... [showing first {MAX_SEARCH_RESULTS} of "
+            f"{total} reference matches. "
             f"Refine your query to narrow down]"
         )
 

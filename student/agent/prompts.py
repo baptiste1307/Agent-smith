@@ -6,16 +6,19 @@ from typing import Any
 from models_public import MBPPTaskInput, SWEBenchTaskInput
 from sandbox.sandbox import SandboxConfig
 
-SYSTEM_PROMPT_TEMPLATE = """You are an autonomous coding agent. You solve tasks by writing Python code.
+SYSTEM_PROMPT_TEMPLATE = """You are an autonomous coding agent.
+You solve tasks by writing Python code.
 
 ## How it works
 You work in turns. At each turn:
 1. You write a short Thought, then ONE Python code block.
 2. Your code is really executed in a sandbox.
-3. You receive an Observation: what your code printed, and the error if there was one.
+3. You receive an Observation: what your code printed,
+   and the error if there was one.
 4. You use this Observation to decide your next step.
 
-You do not need to succeed on the first try. Test your ideas, read the result, then fix them.
+You do not need to succeed on the first try.
+Test your ideas, read the result, then fix them.
 
 ## Response format
 Always answer exactly like this:
@@ -27,30 +30,39 @@ Code:
 ```
 
 ## Rules
-- Always write exactly one ```python code block per answer. An answer without code is wasted.
+- Always write exactly one ```python code block per answer.
+  An answer without code is wasted.
 - Use print() to see values: the Observation only contains what you print.
-- Never write the Observation yourself. Stop after your code block and wait for the real result.
-- Each code block runs in a fresh namespace: variables and functions from previous turns are lost. Redefine everything you need in each block.
-- You can only import these modules: {authorized_imports}. Any other import will fail.
+- Never write the Observation yourself.
+  Stop after your code block and wait for the real result.
+- Each code block runs in a fresh namespace:
+  variables and functions from previous turns are lost.
+  Redefine everything you need in each block.
+- You can only import these modules: {authorized_imports}.
+  Any other import will fail.
 
 ## Available tools
-These functions are already defined in your code namespace. Call them directly, without importing them.
+These functions are already defined in your code namespace.
+Call them directly, without importing them.
 
 {tools_manual}
 
 ## Finishing
-When you have tested your solution and it works, call final_answer() inside your code block:
+When you have tested your solution and it works,
+call final_answer() inside your code block:
 
 ```python
 final_answer(your_answer)
 ```
 
-final_answer() is a Python function, not text. Writing "final_answer" outside a code block does nothing.
+final_answer() is a Python function, not text.
+Writing "final_answer" outside a code block does nothing.
 
 ## Example
 Task: Write a function that returns the largest number of a list.
 
-Thought: I will write the function and test it on a few examples before giving my answer.
+Thought: I will write the function and test it on a few examples
+before giving my answer.
 Code:
 ```python
 def largest(numbers):
@@ -126,12 +138,17 @@ def json_type_to_python(param_info: dict[str, Any]) -> str:
         the schema gives no type.
     """
     if "anyOf" in param_info:
-        options = [json_type_to_python(option) for option in param_info["anyOf"]]
+        options = [
+            json_type_to_python(option) for option in param_info["anyOf"]
+        ]
         unique_options = list(dict.fromkeys(options))  # keeps the order
         return " | ".join(unique_options)
     if param_info.get("type") == "null":
         return "None"
-    return JSON_TO_PYTHON_TYPES.get(param_info.get("type"), "Any")
+    param_type = param_info.get("type")
+    if isinstance(param_type, str):
+        return JSON_TO_PYTHON_TYPES.get(param_type, "Any")
+    return "Any"
 
 
 def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
@@ -168,7 +185,9 @@ def build_mcp_tools_manual(mcp_tools_schema: list[dict[str, Any]]) -> str:
         signature = f"{tool.get('name', 'unknown_tool')}({', '.join(params)})"
         description = tool.get("description") or "No description."
         # Indent every line, so the description stays under its signature
-        sections.append(f"{signature}\n{textwrap.indent(description.strip(), '    ')}")
+        sections.append(
+            f"{signature}\n{textwrap.indent(description.strip(), '    ')}"
+        )
 
     return "\n\n".join(sections)
 
@@ -181,9 +200,12 @@ Your function must have exactly this signature:
 Your solution must pass these tests:
 {tests}
 
-Some hidden tests will also be run: write a general solution, do not hard-code the test values.
+Some hidden tests will also be run:
+write a general solution, do not hard-code the test values.
 
-Test your function on these asserts first. When they all pass, call final_answer() with the full source code of your function as a string."""
+Test your function on these asserts first.
+When they all pass, call final_answer() with the full source code
+of your function as a string."""
 
 
 def build_mbpp_task_prompt(task: MBPPTaskInput) -> str:
@@ -203,7 +225,8 @@ def build_mbpp_task_prompt(task: MBPPTaskInput) -> str:
     )
 
 
-SWEBENCH_TASK_TEMPLATE = """Task: fix the following GitHub issue of the repository {repo}.
+SWEBENCH_TASK_TEMPLATE = """Task: fix the following GitHub issue
+of the repository {repo}.
 
 The repository is in /testbed. Your changes to its files are the solution.
 
@@ -212,12 +235,21 @@ The repository is in /testbed. Your changes to its files are the solution.
 </issue>
 {hints}
 Work efficiently (aim for 5-10 turns total):
-1. Explore: use search_code, search_function_or_class_definition_in_code, or list_files (never import os/subprocess). Read only the relevant line range with read_file(path, start_line, end_line).
-2. Fix: once you identify the root cause, immediately apply the minimal fix with edit_file. Do not modify existing test files.
+1. Explore: use search_code, search_function_or_class_definition_in_code,
+   or list_files (never import os/subprocess).
+   Read only the relevant line range with
+   read_file(path, start_line, end_line).
+2. Fix: once you identify the root cause,
+   immediately apply the minimal fix with edit_file.
+   Do not modify existing test files.
 3. Verify: call run_tests() to run the official evaluation test suite.
-4. Submit: as soon as run_tests() passes and get_patch() is non-empty, immediately call final_answer(get_patch()) on the very next turn.
+4. Submit: as soon as run_tests() passes and get_patch() is non-empty,
+   immediately call final_answer(get_patch()) on the very next turn.
 
-Always print the result of each tool call (or leave it as a bare expression) so you see it in the Observation. Work only from the repository and task context; do not fetch external issues, pull requests, or patches."""
+Always print the result of each tool call
+(or leave it as a bare expression) so you see it in the Observation.
+Work only from the repository and task context;
+do not fetch external issues, pull requests, or patches."""
 
 
 def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:

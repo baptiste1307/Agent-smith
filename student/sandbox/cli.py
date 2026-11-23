@@ -22,7 +22,10 @@ def main() -> None:
     parser.add_argument(
         "--mcp-stdio",
         default=None,
-        help='Command that launches an MCP server, e.g. "python mcp_tools_mbpp.py".',
+        help=(
+            "Command that launches an MCP server, "
+            'e.g. "python mcp_tools_mbpp.py".'
+        ),
     )
     parser.add_argument(
         "--mcp-server",
@@ -54,12 +57,15 @@ def main() -> None:
     try:
         while True:
             try:
-                # print >>>, wait for the user to write then press enter, then read the input
+                # print >>>, wait for the user to write then press enter, then
+                # read the input
                 code = input(">>> ")
             except EOFError:  # Ctrl+D: quit
                 print()
                 break
-            except KeyboardInterrupt:  # Ctrl+C: cancel the line, show the prompt again
+            except (
+                KeyboardInterrupt
+            ):  # Ctrl+C: cancel the line, show the prompt again
                 print()
                 continue
 

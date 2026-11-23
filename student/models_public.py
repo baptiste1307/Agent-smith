@@ -1,5 +1,6 @@
-# ABOUTME: Student-facing Pydantic models for the moulinette evaluation contract.
-# ABOUTME: Students copy this file into their project — it defines the JSON schema the moulinette expects.
+# ABOUTME: Student-facing Pydantic models for moulinette evaluation.
+# ABOUTME: Students copy this file into their project — it defines the
+# JSON schema the moulinette expects.
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -29,11 +30,17 @@ class StepMetrics(BaseModel):
     )
     api_url: str = Field(
         default="",
-        description="Base URL of the LLM API endpoint (e.g., 'https://openrouter.ai/api/v1')",
+        description=(
+            "Base URL of the LLM API endpoint "
+            "(e.g., 'https://openrouter.ai/api/v1')"
+        ),
     )
     model_name: str = Field(
         default="",
-        description="Model identifier used for this step (e.g., 'qwen/qwen3-235b-a22b-2507')",
+        description=(
+            "Model identifier used for this step "
+            "(e.g., 'qwen/qwen3-235b-a22b-2507')"
+        ),
     )
     llm_output: str = Field(
         default="",
@@ -48,20 +55,26 @@ class StepMetrics(BaseModel):
     )
     retries: int = Field(
         default=0,
-        description="Number of LLM API retries before getting a successful response (0 = first attempt succeeded)",
+        description=(
+            "Number of LLM API retries before a successful response "
+            "(0 = first attempt succeeded)"
+        ),
     )
 
 
 class SolutionOutput(BaseModel):
     """Output from student solution — required format for evaluation.
 
-    This is the JSON structure your agent must produce and write to solution.json.
+    This is the JSON structure your agent must write to solution.json.
     The moulinette validates this against task correctness and metrics limits.
     """
 
     task_id: str = Field(
         ...,
-        description="Task identifier (MBPP task_id as string, or SWE-bench instance_id)",
+        description=(
+            "Task identifier "
+            "(MBPP task_id as string, or SWE-bench instance_id)"
+        ),
     )
     benchmark: str = Field(
         ..., description="Benchmark type: 'mbpp' or 'swebench'"
@@ -71,14 +84,20 @@ class SolutionOutput(BaseModel):
     )
     solution: str = Field(
         ...,
-        description="For MBPP: the Python function code. For SWE-bench: the git patch (diff)",
+        description=(
+            "For MBPP: the Python function code. "
+            "For SWE-bench: the git patch (diff)"
+        ),
     )
     iterations: int = Field(
         ..., description="Number of agent loop iterations used"
     )
     total_requests: int = Field(
         ...,
-        description="Total number of LLM API requests made (including retries)",
+        description=(
+            "Total number of LLM API requests made "
+            "(including retries)"
+        ),
     )
     total_input_tokens: int = Field(
         ..., description="Sum of input_tokens across all steps"
@@ -95,7 +114,10 @@ class SolutionOutput(BaseModel):
     )
     system_prompt: str = Field(
         default="",
-        description="Full system prompt sent to the LLM (for provenance checking)",
+        description=(
+            "Full system prompt sent to the LLM "
+            "(for provenance checking)"
+        ),
     )
     error: str | None = Field(
         default=None,
@@ -110,21 +132,27 @@ class SolutionOutput(BaseModel):
 class SandboxConfig(BaseModel):
     """Configuration for the secure code execution sandbox.
 
-    Uses an allowlist approach: only imports in authorized_imports are permitted.
+    Uses an allowlist approach: only authorized imports are permitted.
     Everything else is blocked by default.
     """
 
     authorized_imports: list[str] = Field(
         default_factory=list,
-        description="List of allowed import names (e.g., ['math', 'json', 're']). Glob patterns like 'math.*' are supported.",
+        description=(
+            "Allowed import names (e.g., ['math', 'json', 're']). "
+            "Glob patterns like 'math.*' are supported."
+        ),
     )
     allowed_directories: list[str] = Field(
         default_factory=list,
-        description="List of filesystem paths the sandbox can access (e.g., ['/testbed', '/tmp/agent'])",
+        description=(
+            "Filesystem paths the sandbox can access "
+            "(e.g., ['/testbed', '/tmp/agent'])"
+        ),
     )
     max_execution_time_seconds: int = Field(
         default=30,
-        description="Maximum wall-clock time for a single sandbox execution before timeout",
+        description="Maximum wall-clock time for one sandbox execution",
     )
     max_memory_mb: int = Field(
         default=512,
@@ -141,7 +169,9 @@ class MBPPTaskInput(BaseModel):
     task_id: int = Field(..., description="MBPP task identifier (integer)")
     task_definition: str = Field(
         ...,
-        description="Natural language description of the function to implement",
+        description=(
+            "Natural-language description of the function to implement"
+        ),
     )
     function_definition: str = Field(
         ..., description="Function signature (e.g., 'def solve(nums):')"
@@ -164,18 +194,27 @@ class SWEBenchTaskInput(BaseModel):
 
     instance_id: str = Field(
         ...,
-        description="SWE-bench instance identifier (e.g., 'sympy__sympy-23534')",
+        description=(
+            "SWE-bench instance identifier "
+            "(e.g., 'sympy__sympy-23534')"
+        ),
     )
     problem_statement: str = Field(
-        ..., description="The GitHub issue description — what needs to be fixed"
+        ...,
+        description="The GitHub issue description — what needs to be fixed",
     )
     docker_image: str = Field(
         ...,
-        description="Full Docker image name to pull (e.g., 'swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest')",
+        description=(
+            "Full Docker image name to pull "
+            "(e.g., 'swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest')"
+        ),
     )
     eval_script: str = Field(
         ...,
-        description="Bash script to run inside the container to evaluate the patch",
+        description=(
+            "Bash script to run inside the container to evaluate the patch"
+        ),
     )
     hints_text: str = Field(
         default="", description="Optional hints about the issue (may be empty)"

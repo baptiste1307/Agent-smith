@@ -41,13 +41,14 @@ LIMITS: dict[str, BenchmarkLimits] = {
 
 
 class MetricsTracker:
-    """Tracks agent execution metrics across iterations and formats SolutionOutput."""
+    """Track execution metrics and format SolutionOutput."""
 
     def __init__(self, task_id: str, benchmark: str) -> None:
         """Initialize the metrics tracker.
 
         Args:
-            task_id: Unique task identifier (MBPP task_id or SWE-bench instance_id).
+            task_id: Unique task identifier
+                (MBPP task_id or SWE-bench instance_id).
             benchmark: Target benchmark type ('mbpp' or 'swebench').
         """
         self.task_id = str(task_id)
@@ -89,18 +90,23 @@ class MetricsTracker:
         sandbox_output: str = "",
         step_number: int | None = None,
     ) -> StepMetrics:
-        """Record metrics for a single LLM generate -> sandbox execute iteration.
+        """Record metrics for one LLM generate -> sandbox execute iteration.
 
         Args:
-            llm_response: LLMResponse instance or dict containing token and latency metadata.
+            llm_response: LLMResponse instance or dict with token and latency
+                metadata.
             sandbox_input: Python code sent to the sandbox.
-            sandbox_output: Result of the sandbox execution (stdout/stderr/error).
+            sandbox_output: Result of the sandbox execution.
             step_number: Optional explicit 1-indexed step number.
 
         Returns:
             The recorded StepMetrics instance.
         """
-        step_idx = step_number if step_number is not None else self.current_step_number
+        step_idx = (
+            step_number
+            if step_number is not None
+            else self.current_step_number
+        )
 
         input_tokens = 0
         output_tokens = 0
@@ -158,22 +164,26 @@ class MetricsTracker:
         if len(self.steps) > limits.max_iterations:
             return (
                 True,
-                f"Iterations ({len(self.steps)}) exceeded limit ({limits.max_iterations})",
+                f"Iterations ({len(self.steps)}) exceeded "
+                f"limit ({limits.max_iterations})",
             )
         if self.total_input_tokens > limits.max_input_tokens:
             return (
                 True,
-                f"Input tokens ({self.total_input_tokens}) exceeded limit ({limits.max_input_tokens})",
+                f"Input tokens ({self.total_input_tokens}) exceeded "
+                f"limit ({limits.max_input_tokens})",
             )
         if self.total_output_tokens > limits.max_output_tokens:
             return (
                 True,
-                f"Output tokens ({self.total_output_tokens}) exceeded limit ({limits.max_output_tokens})",
+                f"Output tokens ({self.total_output_tokens}) exceeded "
+                f"limit ({limits.max_output_tokens})",
             )
         if self.elapsed_time_seconds > limits.max_time_seconds:
             return (
                 True,
-                f"Elapsed time ({self.elapsed_time_seconds:.1f}s) exceeded limit ({limits.max_time_seconds}s)",
+                f"Elapsed time ({self.elapsed_time_seconds:.1f}s) exceeded "
+                f"limit ({limits.max_time_seconds}s)",
             )
 
         return False, None
@@ -185,7 +195,7 @@ class MetricsTracker:
         system_prompt: str = "",
         error: str | None = None,
     ) -> SolutionOutput:
-        """Construct the validated SolutionOutput object for moulinette evaluation.
+        """Construct validated SolutionOutput for moulinette evaluation.
 
         Args:
             success: Whether the agent believes it solved the task.

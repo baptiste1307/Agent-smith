@@ -55,12 +55,13 @@ FORBIDDEN_ATTRS = {
 
 
 class SecurityASTValidator(ast.NodeVisitor):
-    """Enforce sandbox security rules at the AST level before code execution."""
+    """Enforce sandbox security rules at AST level."""
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if node.attr in FORBIDDEN_ATTRS:
             raise PermissionError(
-                f"Access to attribute '{node.attr}' is forbidden by sandbox security policy."
+                f"Access to attribute '{node.attr}' is forbidden by sandbox "
+                "security policy."
             )
         self.generic_visit(node)
 
@@ -68,10 +69,15 @@ class SecurityASTValidator(ast.NodeVisitor):
         if isinstance(node.func, ast.Name) and node.func.id == "getattr":
             if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
                 if node.args[1].value in FORBIDDEN_ATTRS:
+                    attr_value = node.args[1].value
+                    if isinstance(attr_value, bytes):
+                        attr_value = attr_value.decode("utf-8", "replace")
                     raise PermissionError(
-                        f"Access to attribute '{node.args[1].value}' is forbidden by sandbox security policy."
+                        f"Access to attribute '{attr_value}' is forbidden by "
+                        "sandbox security policy."
                     )
         self.generic_visit(node)
+
 
 MAX_OUTPUT_CHARS = 10_000
 
@@ -184,7 +190,8 @@ def build_namespace(
         # An MCP server must not be able to replace final_answer or builtins
         if name in namespace:
             raise ValueError(
-                f"MCP tool name '{name}' collides with a reserved sandbox name."
+                f"MCP tool name '{name}' collides with "
+                "a reserved sandbox name."
             )
         namespace[name] = tool
 
@@ -203,9 +210,12 @@ def current_memory_bytes() -> int:
     try:
         with open("/proc/self/statm") as f:
             pages = int(f.read().split()[0])
-        return pages * os.sysconf("SC_PAGE_SIZE")
+        sysconf = getattr(os, "sysconf")
+        return pages * sysconf("SC_PAGE_SIZE")
     except (OSError, ValueError):
-        rusage = resource.getrusage(resource.RUSAGE_SELF)
+        getrusage = getattr(resource, "getrusage")
+        usage_self = getattr(resource, "RUSAGE_SELF")
+        rusage = getrusage(usage_self)
         # On macOS ru_maxrss is in bytes, on Linux ru_maxrss is in kilobytes
         if sys.platform == "darwin":
             return rusage.ru_maxrss
@@ -215,22 +225,25 @@ def current_memory_bytes() -> int:
 def _auto_print_expressions(source: str) -> str:
     """Wrap top-level bare expressions to print their return value if not None.
 
-    Simulates REPL behavior so when the LLM writes `read_file(...)` or `search_code(...)`
-    without wrapping in print(), the result is still captured in stdout and shown in the Observation.
+    Simulates REPL behavior so when LLM writes `read_file(...)` or
+    `search_code(...)` without print(), the result is still captured.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return source
 
-    new_body = []
+    new_body: list[ast.stmt] = []
     for stmt in tree.body:
         if isinstance(stmt, ast.Expr):
             val = stmt.value
             # Don't wrap if already a print(...) or final_answer(...) call
             if isinstance(val, ast.Call):
                 func = val.func
-                if isinstance(func, ast.Name) and func.id in ("print", "final_answer"):
+                if isinstance(func, ast.Name) and func.id in (
+                    "print",
+                    "final_answer",
+                ):
                     new_body.append(stmt)
                     continue
 
@@ -250,7 +263,9 @@ def _auto_print_expressions(source: str) -> str:
                     ast.Expr(
                         value=ast.Call(
                             func=ast.Name(id="print", ctx=ast.Load()),
-                            args=[ast.Name(id="__eval_result__", ctx=ast.Load())],
+                            args=[
+                                ast.Name(id="__eval_result__", ctx=ast.Load())
+                            ],
                             keywords=[],
                         )
                     )
@@ -326,11 +341,14 @@ def execute(
         """Suspend sandbox-only limits during external MCP tool execution."""
 
         def _wrapped(*args: Any, **kwargs: Any) -> Any:
-            remaining = signal.alarm(0)
+            alarm = getattr(signal, "alarm")
+            remaining = alarm(0)
             network.unblock()
             if old_limit is not None:
                 try:
-                    resource.setrlimit(resource.RLIMIT_AS, old_limit)
+                    setrlimit = getattr(resource, "setrlimit")
+                    rlimit_as = getattr(resource, "RLIMIT_AS")
+                    setrlimit(rlimit_as, old_limit)
                 except (ValueError, OSError):
                     pass
             try:
@@ -338,19 +356,22 @@ def execute(
             finally:
                 if old_limit is not None and new_soft is not None:
                     try:
-                        # Recompute relative to current RSS/VM to avoid breaking after tool call
+                        # Recompute relative to current RSS/VM to avoid
+                        # breaking after tool call
                         updated_soft = max(
                             new_soft,
-                            current_memory_bytes() + config.max_memory_mb * 1024 * 1024,
+                            current_memory_bytes()
+                            + config.max_memory_mb * 1024 * 1024,
                         )
-                        resource.setrlimit(
-                            resource.RLIMIT_AS, (updated_soft, old_limit[1])
-                        )
+                        setrlimit = getattr(resource, "setrlimit")
+                        rlimit_as = getattr(resource, "RLIMIT_AS")
+                        setrlimit(rlimit_as, (updated_soft, old_limit[1]))
                     except (ValueError, OSError):
                         pass
                 network.block()
                 if remaining > 0:
-                    signal.alarm(remaining)
+                    alarm = getattr(signal, "alarm")
+                    alarm(remaining)
 
         return _wrapped
 
@@ -376,16 +397,25 @@ def execute(
     except SyntaxError:
         pass
     except PermissionError as e:
-        return {"output": "", "final_answer": None, "error": f"PermissionError: {e}"}
+        return {
+            "output": "",
+            "final_answer": None,
+            "error": f"PermissionError: {e}",
+        }
 
-    signal.signal(signal.SIGALRM, on_timeout)
-    signal.alarm(config.max_execution_time_seconds)  # start the timer
+    sigalrm = getattr(signal, "SIGALRM")
+    alarm = getattr(signal, "alarm")
+    signal.signal(sigalrm, on_timeout)
+    alarm(config.max_execution_time_seconds)  # start the timer
 
     # Allow the code max_memory_mb on top of what the process already uses
     try:
-        old_limit = resource.getrlimit(resource.RLIMIT_AS)
+        getrlimit = getattr(resource, "getrlimit")
+        setrlimit = getattr(resource, "setrlimit")
+        rlimit_as = getattr(resource, "RLIMIT_AS")
+        old_limit = getrlimit(rlimit_as)
         new_soft = current_memory_bytes() + config.max_memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (new_soft, old_limit[1]))
+        setrlimit(rlimit_as, (new_soft, old_limit[1]))
     except (ValueError, OSError):
         pass
 
@@ -403,17 +433,21 @@ def execute(
     except SandboxTimeoutError:
         error = (
             f"SandboxTimeoutError: Execution stopped after "
-            f"{config.max_execution_time_seconds} seconds. The output above is "
+            f"{config.max_execution_time_seconds} seconds. "
+            "The output above is "
             f"partial: it only contains what was printed before the stop. "
             f"Look for an infinite loop or a too slow algorithm."
         )
     except Exception as e:
-        error = f"{type(e).__name__}: {e}"  # e.g. "ZeroDivisionError: division by zero"
+        # e.g. "ZeroDivisionError: division by zero"
+        error = f"{type(e).__name__}: {e}"
     finally:
-        signal.alarm(0)  # always stop the timer so it cannot fire later
+        alarm(0)  # always stop the timer so it cannot fire later
         if old_limit is not None:
             try:
-                resource.setrlimit(resource.RLIMIT_AS, old_limit)
+                setrlimit = getattr(resource, "setrlimit")
+                rlimit_as = getattr(resource, "RLIMIT_AS")
+                setrlimit(rlimit_as, old_limit)
             except (ValueError, OSError):
                 pass
         network.unblock()  # restore network for the agent
@@ -423,8 +457,12 @@ def execute(
     if len(text) > MAX_OUTPUT_CHARS:
         text = (
             f"{text[: MAX_OUTPUT_CHARS // 2]}"
-            + f"\n... [output truncated: {len(text)} characters in total, only the first and last {MAX_OUTPUT_CHARS // 2} are shown] ...\n"
-            + f"{text[-MAX_OUTPUT_CHARS // 2 :]}"
+            + (
+                "\n... [output truncated: "
+                f"{len(text)} characters in total, only the first and last "
+                f"{MAX_OUTPUT_CHARS // 2} are shown] ...\n"
+            )
+            + f"{text[-MAX_OUTPUT_CHARS // 2:]}"
         )
 
     return {"output": text, "final_answer": answer, "error": error}

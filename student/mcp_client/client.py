@@ -37,7 +37,8 @@ class MCPClient:
             command, *args = shlex.split(server)
             if command in ("python", "python3"):
                 command = sys.executable
-            # Allow running `--mcp-stdio "python mcp_tools_mbpp.py"` from student/
+            # Allow running `--mcp-stdio "python mcp_tools_mbpp.py"` from
+            # student/
             # even though the MCP server scripts live at the repository root.
             repo_root = Path(__file__).resolve().parents[2]
             resolved_args = []
@@ -131,7 +132,8 @@ class MCPClient:
         result = future.result()  # wait for the server answer
 
         text = "\n".join(
-            getattr(content, "text", str(content)) for content in result.content
+            getattr(content, "text", str(content))
+            for content in result.content
         )
         if result.is_error:
             raise RuntimeError(f"Tool '{name}' failed: {text}")
@@ -153,7 +155,9 @@ class MCPClient:
             for tool in self._tools
         ]
 
-    def _make_wrapper(self, name: str, param_names: list[str]) -> Callable[..., str]:
+    def _make_wrapper(
+        self, name: str, param_names: list[str]
+    ) -> Callable[..., str]:
         """Create a normal Python function that calls one MCP tool.
 
         The returned function remembers `name` and `param_names` (it is a
@@ -184,7 +188,9 @@ class MCPClient:
             arguments = dict(zip(param_names, args, strict=False))
             for key, value in kwargs.items():
                 if key in arguments:
-                    raise TypeError(f"{name}() got multiple values for argument '{key}'.")
+                    raise TypeError(
+                        f"{name}() got multiple values for argument '{key}'."
+                    )
                 arguments[key] = value
 
             return self._call_tool(name, arguments)
@@ -208,9 +214,7 @@ class MCPClient:
             self._client.read_resource(uri), self._loop
         )
         result = future.result()
-        return "\n".join(
-            getattr(c, "text", str(c)) for c in result.contents
-        )
+        return "\n".join(getattr(c, "text", str(c)) for c in result.contents)
 
     def get_prompts(self) -> list[dict[str, Any]]:
         """Describe the prompts exposed by the connected MCP server."""

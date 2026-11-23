@@ -49,17 +49,28 @@ class TestLLMConnection(unittest.TestCase):
         os.getenv("MISTRAL_API_KEY")
         or os.getenv("GROQ_API_KEY")
         or os.getenv("OPENROUTER_API_KEY"),
-        "Requires MISTRAL_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY env var",
+        (
+            "Requires MISTRAL_API_KEY, GROQ_API_KEY, "
+            "or OPENROUTER_API_KEY env var"
+        ),
     )
     def test_live_llm_call(self):
         candidates = []
         if os.getenv("MISTRAL_API_KEY"):
             candidates.append(
-                ("https://api.mistral.ai/v1", "codestral-latest", "MISTRAL_API_KEY")
+                (
+                    "https://api.mistral.ai/v1",
+                    "codestral-latest",
+                    "MISTRAL_API_KEY",
+                )
             )
         if os.getenv("GROQ_API_KEY"):
             candidates.append(
-                ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "GROQ_API_KEY")
+                (
+                    "https://api.groq.com/openai/v1",
+                    "openai/gpt-oss-120b",
+                    "GROQ_API_KEY",
+                )
             )
         if os.getenv("OPENROUTER_API_KEY"):
             candidates.append(
@@ -80,7 +91,12 @@ class TestLLMConnection(unittest.TestCase):
             )
             try:
                 response = client.generate(
-                    [{"role": "user", "content": "Say hello in one short sentence."}]
+                    [
+                        {
+                            "role": "user",
+                            "content": "Say hello in one short sentence.",
+                        }
+                    ]
                 )
                 self.assertTrue(bool(response.content))
                 self.assertGreater(response.input_tokens, 0)

@@ -23,12 +23,13 @@ class LLMResponse:
 
 @dataclass
 class LLMClient:
-
     provider_url: str
     model_name: str
     rotator: KeyRotator  # provides the currently used API key
     timeout_seconds: float = 60.0  # Max waiting time for HTTP request
-    max_retries: int = 6  # bounded retries so rate limits don't exceed task timeout
+    max_retries: int = (
+        6  # bounded retries so rate limits don't exceed task timeout
+    )
 
     def __post_init__(self) -> None:
         if not self.provider_url.endswith("/chat/completions"):
@@ -39,7 +40,7 @@ class LLMClient:
     def prepare_message(
         self,
         messages: list[dict[str, str]],
-        stop: list[str] = None,
+        stop: list[str] | None = None,
         temperature: float = 0.0,
     ) -> tuple[dict[str, str], dict[str, Any]]:
         """Prepare HTTP headers and payload with current API key."""
@@ -72,13 +73,16 @@ class LLMClient:
         )
 
     @staticmethod
-    def _parse_retry_delay(response: httpx.Response, attempt: int = 0) -> float:
+    def _parse_retry_delay(
+        response: httpx.Response, attempt: int = 0
+    ) -> float:
         """Extract the recommended wait time from a rate-limit response.
 
         Checks (in order):
         1. Retry-After header (seconds, capped at 45s)
         2. "try again in Xs" pattern in the response body (capped at 45s)
-        3. Bounded exponential backoff fallback (5s, 10s, 15s, ... capped at 30s)
+        3. Bounded exponential backoff fallback
+           (5s, 10s, 15s, ... capped at 30s)
         """
         # 1. Retry-After header
         retry_after = response.headers.get("retry-after")
@@ -107,14 +111,16 @@ class LLMClient:
     def generate(
         self,
         messages: list[dict[str, str]],
-        stop: list[str] = None,
+        stop: list[str] | None = None,
         temperature: float = 0.0,
     ) -> LLMResponse:
         """Generate response from LLM with automatic retry and key rotation."""
         last_error = "no attempt made"  # kept to explain the final failure
 
         for attempt in range(self.max_retries + 1):
-            headers, payload = self.prepare_message(messages, stop, temperature)
+            headers, payload = self.prepare_message(
+                messages, stop, temperature
+            )
 
             try:
                 start_time = time.perf_counter()
@@ -136,7 +142,11 @@ class LLMClient:
                                 name = fn.get("name", "")
                                 args = fn.get("arguments", "{}")
                                 parts.append(
-                                    f'<tool_call>\n{{"name": "{name}", "arguments": {args}}}\n</tool_call>'
+                                    "<tool_call>\n"
+                                    '{'
+                                    f'"name": "{name}", "arguments": {args}'
+                                    '}'
+                                    "\n</tool_call>"
                                 )
                             raw_content = "\n".join(parts)
                         else:
@@ -153,18 +163,28 @@ class LLMClient:
                         api_url=self.provider_url,
                     )
 
-                last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+                last_error = (
+                    f"HTTP {response.status_code}: {response.text[:500]}"
+                )
 
                 # Some providers (e.g. Groq on gpt-oss) return HTTP 400 with
-                # `code: "tool_use_failed"` and the raw tool call inside `failed_generation`.
-                # Recover it as a <tool_call> block so the extraction layer can convert it.
+                # `code: "tool_use_failed"` and raw tool call
+                # inside `failed_generation`.
+                # Recover it as a <tool_call> block so the extraction layer can
+                # convert it.
                 if response.status_code == 400:
                     try:
                         err_obj = response.json().get("error", {})
                         failed_gen = err_obj.get("failed_generation")
-                        if err_obj.get("code") == "tool_use_failed" and failed_gen:
+                        if (
+                            err_obj.get("code") == "tool_use_failed"
+                            and failed_gen
+                        ):
                             return LLMResponse(
-                                content=f"<tool_call>\n{failed_gen}\n</tool_call>",
+                                content=(
+                                    f"<tool_call>\n{failed_gen}\n"
+                                    "</tool_call>"
+                                ),
                                 input_tokens=0,
                                 output_tokens=0,
                                 request_time_ms=elapsed_ms,
@@ -182,21 +202,36 @@ class LLMClient:
 
                 # Case quota / rate limit (429, 402): rotate key and retry
                 if response.status_code in (429, 402):
-                    num_keys = len(self.rotator.keys) if self.rotator.keys else 1
+                    num_keys = (
+                        len(self.rotator.keys) if self.rotator.keys else 1
+                    )
                     self.rotator.rotate_key()
 
-                    # If multiple keys are available and we haven't looped through all of them yet,
+                    # If multiple keys are available and we haven't looped
+                    # through all of them yet,
                     # retry immediately on the next fresh key
                     if num_keys > 1 and (attempt + 1) % num_keys != 0:
-                        print(f"[LLM] Rate limited (HTTP {response.status_code}). "
-                              f"Rotated to next key ({self.rotator.current_index + 1}/{num_keys}), retrying in 0.5s...")
+                        print(
+                            "[LLM] Rate limited "
+                            f"(HTTP {response.status_code}). "
+                            "Rotated to next key "
+                            f"({self.rotator.current_index + 1}/{num_keys}), "
+                            "retrying in 0.5s..."
+                        )
                         time.sleep(0.5)
                         continue
 
-                    # All keys exhausted or single key: wait the cooldown specified by provider
-                    wait_secs = self._parse_retry_delay(response, attempt=attempt)
-                    print(f"[LLM] Rate limited on all keys (HTTP {response.status_code}). "
-                          f"Waiting {wait_secs:.0f}s before retry {attempt + 1}/{self.max_retries}...")
+                    # All keys exhausted or single key: wait the cooldown
+                    # specified by provider
+                    wait_secs = self._parse_retry_delay(
+                        response, attempt=attempt
+                    )
+                    print(
+                        "[LLM] Rate limited on all keys "
+                        f"(HTTP {response.status_code}). "
+                        f"Waiting {wait_secs:.0f}s before retry "
+                        f"{attempt + 1}/{self.max_retries}..."
+                    )
                     time.sleep(wait_secs)
                     continue
 

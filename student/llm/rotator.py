@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class KeyRotator:
-    keys: list[str] = None
+    keys: list[str] | None = None
     current_index: int = 0
 
     def __post_init__(self) -> None:
@@ -28,10 +28,12 @@ class KeyRotator:
 
     @classmethod
     def from_env(cls, env_var: str):
-        """Build an instance of KeyRotator from an environment variable name."""
+        """Build a KeyRotator from an environment variable name."""
         env_var_content = os.getenv(env_var)
         if not env_var_content:
-            raise ValueError(f"Environment variable '{env_var}' doesn't exist.")
+            raise ValueError(
+                f"Environment variable '{env_var}' doesn't exist."
+            )
 
         splitted_api_keys = [
             k.strip() for k in env_var_content.split(",") if k.strip()
@@ -43,7 +45,7 @@ class KeyRotator:
 
     @classmethod
     def auto_detect(cls, provider_url: str = "", env_var: str | None = None):
-        """Automatically detect API keys based on provider_url or candidate env vars."""
+        """Detect API keys based on provider_url or candidate env vars."""
         if env_var:
             return cls.from_env(env_var)
 
@@ -52,13 +54,17 @@ class KeyRotator:
         url_lower = provider_url.lower()
 
         if "openrouter" in url_lower:
-            provider_candidates.extend(["OPENROUTER_API_KEY", "OPENROUTER_KEY"])
+            provider_candidates.extend(
+                ["OPENROUTER_API_KEY", "OPENROUTER_KEY"]
+            )
         elif "mistral" in url_lower:
             provider_candidates.extend(["MISTRAL_API_KEY", "MISTRAL_KEY"])
         elif "groq" in url_lower:
             provider_candidates.extend(["GROQ_API_KEY", "GROQ_KEY"])
         elif "together" in url_lower:
-            provider_candidates.extend(["TOGETHER_API_KEY", "TOGETHERAI_API_KEY"])
+            provider_candidates.extend(
+                ["TOGETHER_API_KEY", "TOGETHERAI_API_KEY"]
+            )
         elif "google" in url_lower or "generativelanguage" in url_lower:
             provider_candidates.extend(["GEMINI_API_KEY", "GOOGLE_API_KEY"])
         elif "cohere" in url_lower:

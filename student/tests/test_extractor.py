@@ -13,7 +13,10 @@ class TestCodeExtractor(unittest.TestCase):
         self.assertIsNone(warning)
 
     def test_multiple_python_blocks(self):
-        text = "```python\nx = 10\n```\nSome thought\n```python\nprint(x * 2)\n```"
+        text = (
+            "```python\nx = 10\n```\nSome thought\n"
+            "```python\nprint(x * 2)\n```"
+        )
         code, warning = extract_code(text)
         self.assertEqual(code, "x = 10\nprint(x * 2)")
         self.assertIsNone(warning)
@@ -30,7 +33,9 @@ class TestCodeExtractor(unittest.TestCase):
             code, warning = extract_code(text)
             self.assertEqual(code, "print('hello')")
             self.assertIsNotNone(warning)
-            self.assertIn("Warning: your code block was not tagged ```python", warning)
+            self.assertIn(
+                "Warning: your code block was not tagged ```python", warning
+            )
 
     def test_unclosed_python_block(self):
         text = "Thought: lets run\n```python\nprint('never closed')"
@@ -43,12 +48,19 @@ class TestCodeExtractor(unittest.TestCase):
         text = (
             "I will read the file.\n"
             "<tool_call>\n"
-            '{"name": "read_file", "arguments": {"filepath": "/testbed/file.py", "start_line": 1, "end_line": 10}}\n'
+            '{"name": "read_file", "arguments": {"filepath": '
+            '"/testbed/file.py", "start_line": 1, "end_line": 10}}\n'
             "</tool_call>"
         )
         code, warning = extract_code(text)
         self.assertIsNotNone(code)
-        self.assertIn("read_file(filepath='/testbed/file.py', start_line=1, end_line=10)", code)
+        self.assertIn(
+            (
+                "read_file(filepath='/testbed/file.py', "
+                "start_line=1, end_line=10)"
+            ),
+            code,
+        )
         self.assertIsNotNone(warning)
         self.assertIn("JSON/Hermes", warning)
 
@@ -63,7 +75,13 @@ class TestCodeExtractor(unittest.TestCase):
         )
         code, warning = extract_code(text)
         self.assertIsNotNone(code)
-        self.assertIn("edit_file(filepath='/testbed/src.py', old_str='foo', new_str='bar')", code)
+        self.assertIn(
+            (
+                "edit_file(filepath='/testbed/src.py', "
+                "old_str='foo', new_str='bar')"
+            ),
+            code,
+        )
         self.assertIsNotNone(warning)
         self.assertIn("XML <invoke>", warning)
 
@@ -71,24 +89,33 @@ class TestCodeExtractor(unittest.TestCase):
         text = (
             "Thought: I should search for the definition.\n"
             "Action: search_code\n"
-            'Action Input: {"pattern": "def my_func", "file_pattern": "*.py"}\n'
+            'Action Input: {"pattern": "def my_func", '
+            '"file_pattern": "*.py"}\n'
             "Observation: will follow"
         )
         code, warning = extract_code(text)
         self.assertIsNotNone(code)
-        self.assertIn("search_code(pattern='def my_func', file_pattern='*.py')", code)
+        self.assertIn(
+            "search_code(pattern='def my_func', file_pattern='*.py')", code
+        )
         self.assertIsNotNone(warning)
         self.assertIn("ReAct format", warning)
 
     def test_liquid_tool_call(self):
-        text = "<|tool_call_start|>[code(code='def solve():\\n    return 42\\n')]<|tool_call_end|>"
+        text = (
+            "<|tool_call_start|>[code(code='def solve():\\n    return 42\\n')]"
+            "<|tool_call_end|>"
+        )
         code, warning = extract_code(text)
         self.assertEqual(code, "def solve():\n    return 42")
         self.assertIsNotNone(warning)
         self.assertIn("Liquid", warning)
 
     def test_liquid_direct_mcp_calls(self):
-        text = "<|tool_call_start|>[read_file(filepath='/testbed/file.py'), search_code(pattern='foo')]<|tool_call_end|>"
+        text = (
+            "<|tool_call_start|>[read_file(filepath='/testbed/file.py'), "
+            "search_code(pattern='foo')]<|tool_call_end|>"
+        )
         code, warning = extract_code(text)
         self.assertIn("print(read_file(filepath='/testbed/file.py'))", code)
         self.assertIn("print(search_code(pattern='foo'))", code)
@@ -97,7 +124,8 @@ class TestCodeExtractor(unittest.TestCase):
     def test_hermes_json_tool_name_and_string_args(self):
         text = (
             "<tool_call>\n"
-            '{"tool_call_id": "0", "tool_name": "search_code", "arguments": "{\\"pattern\\": \\"vector add 0 error\\"}"}\n'
+            '{"tool_call_id": "0", "tool_name": "search_code", '
+            '"arguments": "{\\"pattern\\": \\"vector add 0 error\\"}"}\n'
             "</tool_call>"
         )
         code, warning = extract_code(text)
@@ -105,7 +133,10 @@ class TestCodeExtractor(unittest.TestCase):
         self.assertIn("search_code(pattern='vector add 0 error')", code)
 
     def test_final_answer_tool_call(self):
-        text = '<tool_call>{"name": "final_answer", "arguments": {"answer": "def foo(): return 1"}}</tool_call>'
+        text = (
+            '<tool_call>{"name": "final_answer", "arguments": '
+            '{"answer": "def foo(): return 1"}}</tool_call>'
+        )
         code, warning = extract_code(text)
         self.assertEqual(code, "final_answer('def foo(): return 1')")
 
@@ -117,4 +148,3 @@ class TestCodeExtractor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

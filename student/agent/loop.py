@@ -26,7 +26,7 @@ DEFAULT_SANDBOX_CONFIG_PATH = (
 def _prune_old_observations(
     messages: list[dict[str, str]], keep_recent_turns: int = 3
 ) -> list[dict[str, str]]:
-    """Prune verbose outputs from older turns to prevent rate limit and token bloat.
+    """Prune verbose outputs from older turns.
 
     Keeps full observations for the most recent `keep_recent_turns` turns.
     For older turns, keeps only a compact placeholder to conserve token quotas.
@@ -51,8 +51,12 @@ def _prune_old_observations(
             if line.startswith("Error:") and line != "Error: None"
         ]
         err_note = f"\n{err_lines[0]}" if err_lines else "\nError: None"
-        pruned[idx]["content"] = (
-            f"Observation:\n[Output of earlier turn omitted to keep context compact]{err_note}"
+        pruned[idx][
+            "content"
+        ] = (
+            "Observation:\n"
+            "[Output of earlier turn omitted to keep context compact]"
+            f"{err_note}"
         )
 
     return pruned
@@ -109,7 +113,7 @@ def agent_loop(
             "content": system_prompt,
         },
         {"role": "user", "content": exercice},
-    ]  # at first messages only contains system prompt and our exercice request for the AI
+    ]  # first messages: system prompt + exercise request
 
     if tracker:
         tracker.system_prompt = system_prompt
@@ -155,10 +159,16 @@ def agent_loop(
         if len(raw_output) > 4000:
             raw_output = (
                 raw_output[:1500]
-                + f"\n... [output truncated: showing first 1500 and last 2500 of {len(result['output'])} characters to save tokens] ...\n"
+                + (
+                    "\n... [output truncated: showing first 1500 and last "
+                    f"2500 of {len(result['output'])} characters to save "
+                    "tokens] ...\n"
+                )
                 + raw_output[-2500:]
             )
-        observation = f"Observation:\nOutput:\n{raw_output}\nError: {result['error']}"
+        observation = (
+            f"Observation:\nOutput:\n{raw_output}\nError: {result['error']}"
+        )
         if warning is not None:  # the code block was malformed
             observation = f"{warning}\n{observation}"
         print(observation)

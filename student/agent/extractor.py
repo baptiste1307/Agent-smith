@@ -5,7 +5,8 @@ Implements the multi-format extraction layer specified in Section V.1.2:
 - Alternative code blocks: ```py, ```Python, untagged ``` ... ```
 - Unclosed Python blocks: ```python ...
 - XML tool calls (Anthropic style): <invoke name="...">...</invoke>
-- JSON/Hermes tool calls: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+- JSON/Hermes tool calls:
+  <tool_call>{"name": "...", "arguments": {...}}</tool_call>
 - ReAct format: Action: <tool_name>\nAction Input: <json_or_string>
 
 Non-Python formats are converted to equivalent Python statements so the sandbox
@@ -23,7 +24,8 @@ OTHER_LABEL_PATTERN = r"```(?:[Pp][Yy](?:thon|THON)?3?)?[ \t]*\n(.*?)```"
 def _format_python_call(func_name: str, args: dict[str, Any] | Any) -> str:
     """Convert a function name and arguments into valid Python execution code.
 
-    Wraps normal tool calls to print their result so the LLM receives the Observation.
+    Wraps normal tool calls to print their result so the LLM receives the
+    Observation.
     final_answer() is called directly without print wrapping.
     """
     func_clean = func_name.strip()
@@ -54,7 +56,9 @@ def _format_python_call(func_name: str, args: dict[str, Any] | Any) -> str:
 def _extract_hermes_json(text: str) -> tuple[str | None, str | None]:
     """Extract and convert JSON / Hermes <tool_call> blocks."""
     # 1. Closed <tool_call>...</tool_call>
-    matches = re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", text, re.DOTALL)
+    matches = re.findall(
+        r"<tool_call>\s*(.*?)\s*</tool_call>", text, re.DOTALL
+    )
     if not matches:
         # 2. Unclosed <tool_call>...
         unclosed = re.findall(r"<tool_call>\s*(\{.*)", text, re.DOTALL)
@@ -95,8 +99,10 @@ def _extract_hermes_json(text: str) -> tuple[str | None, str | None]:
     if code_lines:
         code = "\n".join(code_lines)
         warning = (
-            "Warning: your answer was detected in JSON/Hermes <tool_call> format. "
-            f"It was converted to equivalent Python code:\n```python\n{code}\n```"
+            "Warning: your answer was detected in JSON/Hermes "
+            "<tool_call> format. "
+            "It was converted to equivalent Python code:\n"
+            f"```python\n{code}\n```"
         )
         return code, warning
 
@@ -104,7 +110,7 @@ def _extract_hermes_json(text: str) -> tuple[str | None, str | None]:
 
 
 def _extract_xml_invokes(text: str) -> tuple[str | None, str | None]:
-    """Extract and convert Anthropic-style <invoke name="..."> XML tool calls."""
+    """Extract and convert Anthropic-style XML tool calls."""
     pattern = r"<invoke\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</invoke>"
     matches = re.findall(pattern, text, re.DOTALL)
     if not matches:
@@ -128,7 +134,9 @@ def _extract_xml_invokes(text: str) -> tuple[str | None, str | None]:
 
         # 2. <tag>val</tag> if no <parameter> tags
         if not param_matches:
-            tag_matches = re.findall(r"<([a-zA-Z_0-9]+)>(.*?)</\1>", body, re.DOTALL)
+            tag_matches = re.findall(
+                r"<([a-zA-Z_0-9]+)>(.*?)</\1>", body, re.DOTALL
+            )
             for t_name, t_val in tag_matches:
                 val_str = t_val.strip()
                 try:
@@ -142,7 +150,8 @@ def _extract_xml_invokes(text: str) -> tuple[str | None, str | None]:
         code = "\n".join(code_lines)
         warning = (
             "Warning: your answer was detected in XML <invoke> format. "
-            f"It was converted to equivalent Python code:\n```python\n{code}\n```"
+            "It was converted to equivalent Python code:\n"
+            f"```python\n{code}\n```"
         )
         return code, warning
 
@@ -151,7 +160,10 @@ def _extract_xml_invokes(text: str) -> tuple[str | None, str | None]:
 
 def _extract_react_format(text: str) -> tuple[str | None, str | None]:
     """Extract and convert ReAct format (Action: ... / Action Input: ...)."""
-    pattern = r"Action:\s*([a-zA-Z_0-9]+)\s*\nAction Input:\s*(.*?)(?=\n(?:Action|Thought|Observation)|$)"
+    pattern = (
+        r"Action:\s*([a-zA-Z_0-9]+)\s*\nAction Input:\s*(.*?)"
+        r"(?=\n(?:Action|Thought|Observation)|$)"
+    )
     matches = re.findall(pattern, text, re.DOTALL)
     if not matches:
         return None, None
@@ -172,8 +184,10 @@ def _extract_react_format(text: str) -> tuple[str | None, str | None]:
     if code_lines:
         code = "\n".join(code_lines)
         warning = (
-            "Warning: your answer was detected in ReAct format (Action / Action Input). "
-            f"It was converted to equivalent Python code:\n```python\n{code}\n```"
+            "Warning: your answer was detected in ReAct format "
+            "(Action / Action Input). "
+            "It was converted to equivalent Python code:\n"
+            f"```python\n{code}\n```"
         )
         return code, warning
 
@@ -181,13 +195,17 @@ def _extract_react_format(text: str) -> tuple[str | None, str | None]:
 
 
 def _extract_liquid_tool_call(text: str) -> tuple[str | None, str | None]:
-    """Extract code from Liquid AI tool call format: <|tool_call_start|>[...]<|tool_call_end|>
+    """Extract code from Liquid AI tool call format.
 
     Handles both:
     1. Code execution wrappers: [code(code='...')]
     2. Direct MCP tool calls: [read_file(...), search_code(...)]
     """
-    m = re.search(r"<\|tool_call_start\|>\[(.*?)\](?:<\|tool_call_end\|>)?", text, re.DOTALL)
+    m = re.search(
+        r"<\|tool_call_start\|>\[(.*?)\](?:<\|tool_call_end\|>)?",
+        text,
+        re.DOTALL,
+    )
     if not m:
         m = re.search(r"<\|tool_call_start\|>\[(.*)", text, re.DOTALL)
         if not m:
@@ -196,7 +214,9 @@ def _extract_liquid_tool_call(text: str) -> tuple[str | None, str | None]:
     call_body = m.group(1).rstrip("]")
     try:
         # Wrap in brackets if not already wrapped
-        expr_str = f"[{call_body}]" if not call_body.startswith("[") else call_body
+        expr_str = (
+            f"[{call_body}]" if not call_body.startswith("[") else call_body
+        )
         parsed = ast.parse(expr_str, mode="eval")
 
         elements = []
@@ -212,7 +232,9 @@ def _extract_liquid_tool_call(text: str) -> tuple[str | None, str | None]:
                 # Check for code(code='...')
                 if func_name == "code":
                     for kw in elem.keywords:
-                        if kw.arg == "code" and isinstance(kw.value, ast.Constant):
+                        if kw.arg == "code" and isinstance(
+                            kw.value, ast.Constant
+                        ):
                             statements.append(str(kw.value.value).strip())
                     continue
 
@@ -236,8 +258,16 @@ def _extract_liquid_tool_call(text: str) -> tuple[str | None, str | None]:
     code_match = re.search(r"code=['\"](.*?)['\"]", call_body, re.DOTALL)
     if code_match:
         try:
-            code = code_match.group(1).encode("utf-8").decode("unicode_escape", "ignore").strip()
-            return code, "Warning: extracted code from Liquid tool call format."
+            code = (
+                code_match.group(1)
+                .encode("utf-8")
+                .decode("unicode_escape", "ignore")
+                .strip()
+            )
+            return (
+                code,
+                "Warning: extracted code from Liquid tool call format.",
+            )
         except Exception:
             pass
 
@@ -259,11 +289,11 @@ def extract_code(answer_content: str) -> tuple[str, str | None]:
         answer_content: Raw text generated by the LLM.
 
     Returns:
-        A (code, warning) tuple: the extracted/converted executable Python code,
-        and an explanatory warning message if the block was malformed or translated.
+        A (code, warning) tuple: extracted/converted executable Python code,
+        and warning message if the block was malformed or translated.
 
     Raises:
-        ValueError: If no executable code or valid tool call could be extracted.
+        ValueError: If no executable code or tool call can be extracted.
     """
     # Clean possible <end_code> markers
     cleaned_content = answer_content.replace("<end_code>", "")
@@ -286,7 +316,8 @@ def extract_code(answer_content: str) -> tuple[str, str | None]:
     if other_code:
         warning = (
             "Warning: your code block was not tagged ```python, it was "
-            "executed as Python anyway. Always start your code block with ```python."
+            "executed as Python anyway. Always start your code block with "
+            "```python."
         )
         return "\n".join(other_code), warning
 
@@ -297,31 +328,34 @@ def extract_code(answer_content: str) -> tuple[str, str | None]:
         if code:
             warning = (
                 "Warning: your code block had no closing ```. Everything "
-                "after ```python was executed. Always close your code block with ```."
+                "after ```python was executed. Always close your code block "
+                "with ```."
             )
             return code, warning
 
     # 4. JSON / Hermes tool calls (<tool_call>...</tool_call>)
-    code, warning = _extract_hermes_json(cleaned_content)
-    if code:
-        return code, warning
+    hermes_code, hermes_warning = _extract_hermes_json(cleaned_content)
+    if hermes_code:
+        return hermes_code, hermes_warning
 
     # 5. XML tool calls (<invoke name="...">...</invoke>)
-    code, warning = _extract_xml_invokes(cleaned_content)
-    if code:
-        return code, warning
+    xml_code, xml_warning = _extract_xml_invokes(cleaned_content)
+    if xml_code:
+        return xml_code, xml_warning
 
     # 6. ReAct format (Action: ... / Action Input: ...)
-    code, warning = _extract_react_format(cleaned_content)
-    if code:
-        return code, warning
+    react_code, react_warning = _extract_react_format(cleaned_content)
+    if react_code:
+        return react_code, react_warning
 
-    # 7. Liquid tool call format (<|tool_call_start|>[code(code='...')]<|tool_call_end|>)
-    code, warning = _extract_liquid_tool_call(cleaned_content)
-    if code:
-        return code, warning
+    # 7. Liquid tool call format
+    # (<|tool_call_start|>[code(code='...')]<|tool_call_end|>)
+    liquid_code, liquid_warning = _extract_liquid_tool_call(cleaned_content)
+    if liquid_code:
+        return liquid_code, liquid_warning
 
     # No extractable code or tool call found
     raise ValueError(
-        "No code provided. You should provide python code to answer query, with ```python tag."
+        "No code provided. You should provide python code to answer query, "
+        "with ```python tag."
     )

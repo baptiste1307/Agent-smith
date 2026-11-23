@@ -72,7 +72,9 @@ class TestMetricsTracker(unittest.TestCase):
         tracker = MetricsTracker(task_id="102", benchmark="mbpp")
 
         # Step with None (e.g. sandbox only)
-        step1 = tracker.record_step(llm_response=None, sandbox_input="pass", sandbox_output="")
+        step1 = tracker.record_step(
+            llm_response=None, sandbox_input="pass", sandbox_output=""
+        )
         self.assertEqual(step1.step, 1)
         self.assertEqual(step1.input_tokens, 0)
         self.assertEqual(step1.output_tokens, 0)
@@ -158,7 +160,9 @@ class TestMetricsTracker(unittest.TestCase):
         self.assertIn("Output tokens", reason)
 
     def test_check_limits_swebench(self):
-        tracker = MetricsTracker(task_id="sympy__sympy-1234", benchmark="swebench")
+        tracker = MetricsTracker(
+            task_id="sympy__sympy-1234", benchmark="swebench"
+        )
         self.assertEqual(LIMITS["swebench"].max_iterations, 30)
         self.assertEqual(LIMITS["swebench"].max_input_tokens, 300_000)
         self.assertEqual(LIMITS["swebench"].max_output_tokens, 10_000)
@@ -188,7 +192,10 @@ class TestMetricsTracker(unittest.TestCase):
 
         tracker.record_step(
             llm_response=LLMResponse(
-                content="Thought: add function\n```python\ndef add(a, b): return a + b\n```",
+                content=(
+                    "Thought: add function\n"
+                    "```python\ndef add(a, b): return a + b\n```"
+                ),
                 input_tokens=120,
                 output_tokens=40,
                 request_time_ms=300.0,
@@ -249,11 +256,15 @@ class TestMetricsTracker(unittest.TestCase):
 
         self.assertFalse(solution.success)
         self.assertEqual(solution.solution, "")
-        self.assertEqual(solution.error, "Execution timed out after 120 seconds")
+        self.assertEqual(
+            solution.error, "Execution timed out after 120 seconds"
+        )
 
         validated = SolutionOutput.model_validate_json(out_file.read_text())
         self.assertFalse(validated.success)
-        self.assertEqual(validated.error, "Execution timed out after 120 seconds")
+        self.assertEqual(
+            validated.error, "Execution timed out after 120 seconds"
+        )
 
 
 if __name__ == "__main__":
