@@ -5,9 +5,8 @@ the final SolutionOutput schema required by the moulinette evaluation.
 Enforces hard limits defined in Section VI.1 for MBPP and SWE-bench.
 """
 
-import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any

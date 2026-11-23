@@ -45,7 +45,11 @@ def _prune_old_observations(
     for idx in cutoff_indices:
         content = pruned[idx]["content"]
         lines = content.splitlines()
-        err_lines = [l for l in lines if l.startswith("Error:") and l != "Error: None"]
+        err_lines = [
+            line
+            for line in lines
+            if line.startswith("Error:") and line != "Error: None"
+        ]
         err_note = f"\n{err_lines[0]}" if err_lines else "\nError: None"
         pruned[idx]["content"] = (
             f"Observation:\n[Output of earlier turn omitted to keep context compact]{err_note}"

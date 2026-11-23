@@ -10,7 +10,6 @@ All commands and patch generations run in the repository located at TESTBED_PATH
 
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any
 

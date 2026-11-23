@@ -42,6 +42,13 @@ def main() -> None:
     wrappers = client.get_wrappers() if client else {}
 
     print(f"Available tools: {list(wrappers)}")
+    if client:
+        resources = [r["uri"] for r in client.get_resources()]
+        prompts = [p["name"] for p in client.get_prompts()]
+        if resources:
+            print(f"Available MCP resources: {resources}")
+        if prompts:
+            print(f"Available MCP prompts: {prompts}")
     namespace = build_namespace(config, wrappers)
 
     try:

@@ -14,7 +14,6 @@ import ast
 import fnmatch
 import os
 import re
-from collections.abc import Iterator
 from pathlib import Path
 
 # Directories ignored by all search operations
@@ -210,7 +209,7 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
     for file_path in files:
         abs_path = str(file_path.resolve())
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 for lineno, line in enumerate(f, start=1):
                     if regex.search(line):
                         total_found += 1
@@ -325,7 +324,7 @@ def find_references(
     for file_path in files:
         abs_path = str(file_path.resolve())
         try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 for lineno, line_text in enumerate(f, start=1):
                     if ref_regex.search(line_text):
                         content = line_text.rstrip("\r\n")

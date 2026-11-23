@@ -1,13 +1,12 @@
 """Tests for the sandbox security constraints and execution semantics."""
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from models_public import SandboxConfig
-from sandbox.sandbox import execute, load_config
-from sandbox.security import is_import_allowed, is_path_allowed, NetworkBlocker
+from sandbox.sandbox import execute
+from sandbox.security import is_import_allowed, is_path_allowed
 
 
 class TestSandboxSecurity(unittest.TestCase):
@@ -122,6 +121,17 @@ class TestSandboxSecurity(unittest.TestCase):
         result = execute(code, self.config)
         self.assertIsNotNone(result["error"])
         self.assertIn("SandboxTimeoutError", result["error"])
+
+    def test_memory_limit_enforced(self):
+        small_mem = SandboxConfig(
+            authorized_imports=[],
+            allowed_directories=[str(self.allowed_dir)],
+            max_execution_time_seconds=3,
+            max_memory_mb=64,
+        )
+        result = execute("buf = bytearray(256 * 1024 * 1024)", small_mem)
+        self.assertIsNotNone(result["error"])
+        self.assertIn("MemoryError", result["error"])
 
     def test_propagation_keyboard_interrupt(self):
         # KeyboardInterrupt must NOT be caught as a normal string error

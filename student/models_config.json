@@ -1,0 +1,68 @@
+{
+  "default_benchmarks": {
+    "mbpp": {
+      "provider": "groq",
+      "provider_url": "https://api.groq.com/openai/v1",
+      "model_name": "qwen/qwen3.8-27b",
+      "fallback_provider": "mistral",
+      "fallback_provider_url": "https://api.mistral.ai/v1",
+      "fallback_model_name": "codestral-latest",
+      "limits": {
+        "max_iterations": 10,
+        "max_input_tokens": 6000,
+        "max_output_tokens": 1500,
+        "timeout_seconds": 120
+      }
+    },
+    "swebench": {
+      "provider": "mistral",
+      "provider_url": "https://api.mistral.ai/v1",
+      "model_name": "codestral-latest",
+      "keep_recent_turns": 10,
+      "fallback_provider": "groq",
+      "fallback_provider_url": "https://api.groq.com/openai/v1",
+      "fallback_model_name": "qwen/qwen3.8-27b",
+      "limits": {
+        "max_iterations": 30,
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "timeout_seconds": 900
+      }
+    }
+  },
+  "providers": {
+    "mistral": {
+      "provider_url": "https://api.mistral.ai/v1",
+      "api_key_env": "MISTRAL_API_KEY",
+      "tier": "free",
+      "models": [
+        "codestral-latest",
+        "ministral-14b-latest",
+        "mistral-small-latest",
+        "mistral-medium-latest"
+      ]
+    },
+    "groq": {
+      "provider_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "tier": "free",
+      "models": [
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b"
+      ]
+    },
+    "openrouter": {
+      "provider_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "tier": "free",
+      "models": [
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "baidu/ernie-5.5-flash-preview:free",
+        "google/gemma-4-31b-it:free",
+        "google/gemma-4-26b-a4b-it:free"
+      ]
+    }
+  }
+}
+

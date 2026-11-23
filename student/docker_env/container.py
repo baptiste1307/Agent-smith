@@ -10,8 +10,6 @@ Implements the Docker execution environment required by Section V.4:
 import atexit
 import os
 import re
-import shlex
-import shutil
 import signal
 import subprocess
 import sys

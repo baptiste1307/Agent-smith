@@ -1,8 +1,11 @@
 import asyncio
 import os
 import shlex
+import sys
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 from mcp import Client, StdioServerParameters
 
@@ -32,9 +35,24 @@ class MCPClient:
             self._server: str | StdioServerParameters = server
         else:
             command, *args = shlex.split(server)
+            if command in ("python", "python3"):
+                command = sys.executable
+            # Allow running `--mcp-stdio "python mcp_tools_mbpp.py"` from student/
+            # even though the MCP server scripts live at the repository root.
+            repo_root = Path(__file__).resolve().parents[2]
+            resolved_args = []
+            for arg in args:
+                if (
+                    arg.endswith(".py")
+                    and not Path(arg).exists()
+                    and (repo_root / arg).exists()
+                ):
+                    resolved_args.append(str(repo_root / arg))
+                else:
+                    resolved_args.append(arg)
             self._server = StdioServerParameters(
                 command=command,
-                args=args,
+                args=resolved_args,
                 env=dict(os.environ),
             )
 
@@ -163,7 +181,7 @@ class MCPClient:
                 )
 
             # MCP only accepts named arguments: name the positional ones
-            arguments = dict(zip(param_names, args))
+            arguments = dict(zip(param_names, args, strict=False))
             for key, value in kwargs.items():
                 if key in arguments:
                     raise TypeError(f"{name}() got multiple values for argument '{key}'.")

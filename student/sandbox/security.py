@@ -148,16 +148,21 @@ def make_safe_open(
                 "Access to arbitrary file descriptors is denied by sandbox policy."
             )
 
-        # Remap /testbed/... to host TESTBED_PATH if set
+        # Remap /testbed/... to host TESTBED_PATH if set and /testbed is allowed
+        effective_allowed = list(allowed_directories)
         if isinstance(file, (str, Path)):
             f_str = str(file).strip()
             testbed_env = os.environ.get("TESTBED_PATH")
-            if testbed_env and (f_str in ("/testbed", "/testbed/") or f_str.startswith("/testbed/")):
+            if testbed_env and is_path_allowed("/testbed", allowed_directories):
+                effective_allowed.append(testbed_env)
+            if testbed_env and (
+                f_str in ("/testbed", "/testbed/") or f_str.startswith("/testbed/")
+            ):
                 rel = f_str[len("/testbed/") :] if f_str.startswith("/testbed/") else ""
                 file = str(Path(testbed_env) / rel)
 
         # Validate filesystem path against allowed directories
-        if not is_path_allowed(file, allowed_directories):
+        if not is_path_allowed(file, effective_allowed):
             raise PermissionError(
                 f"Access to path '{file}' is denied by sandbox policy "
                 f"(allowed directories: {allowed_directories})."
@@ -209,6 +214,8 @@ class NetworkBlocker:
             socket, "create_connection", None
         )
         self._orig_getaddrinfo = getattr(socket, "getaddrinfo", None)
+        self._orig_socketpair = getattr(socket, "socketpair", None)
+        self._orig_fromfd = getattr(socket, "fromfd", None)
 
     def block(self) -> None:
         """Block all socket creation and connection attempts."""
@@ -223,6 +230,10 @@ class NetworkBlocker:
             socket.create_connection = disabled_socket  # type: ignore[misc]
         if self._orig_getaddrinfo:
             socket.getaddrinfo = disabled_socket  # type: ignore[misc]
+        if self._orig_socketpair:
+            socket.socketpair = disabled_socket  # type: ignore[misc]
+        if self._orig_fromfd:
+            socket.fromfd = disabled_socket  # type: ignore[misc]
 
     def unblock(self) -> None:
         """Restore original socket functions."""
@@ -231,3 +242,7 @@ class NetworkBlocker:
             socket.create_connection = self._orig_create_connection  # type: ignore[misc]
         if self._orig_getaddrinfo:
             socket.getaddrinfo = self._orig_getaddrinfo  # type: ignore[misc]
+        if self._orig_socketpair:
+            socket.socketpair = self._orig_socketpair  # type: ignore[misc]
+        if self._orig_fromfd:
+            socket.fromfd = self._orig_fromfd  # type: ignore[misc]

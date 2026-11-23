@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 import os
-import sys
+from dataclasses import dataclass
 
 
 @dataclass

@@ -19,10 +19,12 @@ mcp = MCPServer("agent-smith-mbpp")
 
 @mcp.tool()
 def run_tests(
-    code: str, test_list: list[str], test_imports: list[str] = []
-) -> str:  # noqa: B006
+    code: str,
+    test_list: list[str],
+    test_imports: list[str] | None = None,
+) -> str:
     """Run a Python code snippet against a set of MBPP test cases."""
-    return run_tests_mbpp(code, test_list, test_imports)
+    return run_tests_mbpp(code, test_list, test_imports or [])
 
 
 @mcp.resource("mbpp://info")

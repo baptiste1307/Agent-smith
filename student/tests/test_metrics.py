@@ -1,14 +1,13 @@
 """Unit tests for llm/metrics.py."""
 
-import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from llm.client import LLMResponse
-from llm.metrics import LIMITS, BenchmarkLimits, MetricsTracker
-from models_public import SolutionOutput, StepMetrics
+from llm.metrics import LIMITS, MetricsTracker
+from models_public import SolutionOutput
 
 
 class TestMetricsTracker(unittest.TestCase):

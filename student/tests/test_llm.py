@@ -2,8 +2,8 @@
 
 import os
 import unittest
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 from llm.client import LLMClient
 from llm.rotator import KeyRotator
 
