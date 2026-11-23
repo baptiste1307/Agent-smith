@@ -274,18 +274,23 @@ def execute(
     code: str,
     config: SandboxConfig,
     tools: dict[str, Callable[..., Any]] | None = None,
+    namespace: dict[str, Any] | None = None,
 ) -> dict:
     """Execute untrusted code inside the sandbox namespace.
 
     While the code runs, the network is blocked, a timeout is armed and
     the memory usage is capped. All these restrictions are removed once
-    execution ends, whatever the outcome.
+    execution ends, whatever the outcome. MCP tool wrappers temporarily
+    suspend sandbox-only restrictions (timeout, network, RLIMIT_AS) while
+    executing outside the sandbox security domain.
 
     Args:
         code: The Python source code to execute.
         config: The sandbox configuration (imports, directories,
             timeout and memory limits).
         tools: MCP tool wrappers, mapping tool name to a Python callable.
+        namespace: Optional persistent namespace (e.g. for interactive REPL).
+            When None, a fresh namespace is created.
 
     Returns:
         A dict with three keys:
@@ -295,7 +300,6 @@ def execute(
             - "error": a "ErrorType: message" string if the code raised
               an exception, or None otherwise.
     """
-    namespace = build_namespace(config, tools)
     output = io.StringIO()
     answer = None
     error = None
@@ -314,20 +318,56 @@ def execute(
             f"Execution exceeded {config.max_execution_time_seconds} seconds."
         )
 
-    signal.signal(signal.SIGALRM, on_timeout)
-    signal.alarm(config.max_execution_time_seconds)  # start the timer
-
-    # Allow the code max_memory_mb on top of what the process already uses
-    old_limit = None
-    try:
-        old_limit = resource.getrlimit(resource.RLIMIT_AS)
-        new_soft = current_memory_bytes() + config.max_memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (new_soft, old_limit[1]))
-    except (ValueError, OSError):
-        pass
-
+    old_limit: tuple[int, int] | None = None
+    new_soft: int | None = None
     network = NetworkBlocker()
-    network.block()  # no network access while untrusted code runs
+
+    def _wrap_external_tool(tool_fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Suspend sandbox-only limits during external MCP tool execution."""
+
+        def _wrapped(*args: Any, **kwargs: Any) -> Any:
+            remaining = signal.alarm(0)
+            network.unblock()
+            if old_limit is not None:
+                try:
+                    resource.setrlimit(resource.RLIMIT_AS, old_limit)
+                except (ValueError, OSError):
+                    pass
+            try:
+                return tool_fn(*args, **kwargs)
+            finally:
+                if old_limit is not None and new_soft is not None:
+                    try:
+                        # Recompute relative to current RSS/VM to avoid breaking after tool call
+                        updated_soft = max(
+                            new_soft,
+                            current_memory_bytes() + config.max_memory_mb * 1024 * 1024,
+                        )
+                        resource.setrlimit(
+                            resource.RLIMIT_AS, (updated_soft, old_limit[1])
+                        )
+                    except (ValueError, OSError):
+                        pass
+                network.block()
+                if remaining > 0:
+                    signal.alarm(remaining)
+
+        return _wrapped
+
+    wrapped_tools = (
+        {name: _wrap_external_tool(fn) for name, fn in tools.items()}
+        if tools
+        else None
+    )
+
+    if namespace is None:
+        exec_namespace = build_namespace(config, wrapped_tools)
+    else:
+        exec_namespace = namespace
+        if wrapped_tools:
+            for name, fn in wrapped_tools.items():
+                if name not in ("__builtins__", "__name__", "final_answer"):
+                    exec_namespace[name] = fn
 
     # Enforce AST-level security restrictions before execution
     try:
@@ -336,20 +376,26 @@ def execute(
     except SyntaxError:
         pass
     except PermissionError as e:
-        signal.alarm(0)
-        if old_limit is not None:
-            try:
-                resource.setrlimit(resource.RLIMIT_AS, old_limit)
-            except (ValueError, OSError):
-                pass
-        network.unblock()
         return {"output": "", "final_answer": None, "error": f"PermissionError: {e}"}
+
+    signal.signal(signal.SIGALRM, on_timeout)
+    signal.alarm(config.max_execution_time_seconds)  # start the timer
+
+    # Allow the code max_memory_mb on top of what the process already uses
+    try:
+        old_limit = resource.getrlimit(resource.RLIMIT_AS)
+        new_soft = current_memory_bytes() + config.max_memory_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (new_soft, old_limit[1]))
+    except (ValueError, OSError):
+        pass
+
+    network.block()  # no network access while untrusted code runs
 
     executable_code = _auto_print_expressions(code)
 
     try:
         with contextlib.redirect_stdout(output):
-            exec(executable_code, namespace)
+            exec(executable_code, exec_namespace)
     except FinalAnswerException as e:
         answer = e.answer
     except MemoryError:

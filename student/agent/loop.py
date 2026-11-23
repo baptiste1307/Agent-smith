@@ -58,11 +58,12 @@ def agent_loop(
     exercice: str,
     mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
     mcp_tools_schema: list[dict[str, Any]] | None = None,
-    model_name: str = "liquid/lfm-2.5-2.6b:free",
+    model_name: str = "nvidia/nemotron-3-ultra-550b-a55b:free",
     provider_url: str = "https://openrouter.ai/api/v1",
     max_iterations: int = 10,
     tracker: MetricsTracker | None = None,
     api_key_env: str | None = None,
+    keep_recent_turns: int = 3,
 ):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
@@ -110,7 +111,9 @@ def agent_loop(
         tracker.system_prompt = system_prompt
 
     for turns in range(max_iterations):  # max turns
-        prompt_messages = _prune_old_observations(messages)
+        prompt_messages = _prune_old_observations(
+            messages, keep_recent_turns=keep_recent_turns
+        )
         answer = client.generate(
             prompt_messages,
             stop=["Observation:"],
@@ -147,8 +150,9 @@ def agent_loop(
         raw_output = result["output"] or ""
         if len(raw_output) > 4000:
             raw_output = (
-                raw_output[:4000]
-                + f"\n... [output truncated: showing first 4000 of {len(result['output'])} characters to save tokens]"
+                raw_output[:1500]
+                + f"\n... [output truncated: showing first 1500 and last 2500 of {len(result['output'])} characters to save tokens] ...\n"
+                + raw_output[-2500:]
             )
         observation = f"Observation:\nOutput:\n{raw_output}\nError: {result['error']}"
         if warning is not None:  # the code block was malformed

@@ -46,20 +46,51 @@ class TestKeyRotator(unittest.TestCase):
 
 class TestLLMConnection(unittest.TestCase):
     @unittest.skipUnless(
-        os.getenv("OPENROUTER_API_KEY"), "Requires OPENROUTER_API_KEY env var"
+        os.getenv("MISTRAL_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY"),
+        "Requires MISTRAL_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY env var",
     )
     def test_live_llm_call(self):
-        client = LLMClient(
-            provider_url="https://openrouter.ai/api/v1",
-            model_name="liquid/lfm-2.5-2.6b:free",
-            rotator=KeyRotator.from_env("OPENROUTER_API_KEY"),
-        )
-        response = client.generate(
-            [{"role": "user", "content": "Dis bonjour en une phrase."}]
-        )
-        self.assertTrue(bool(response.content))
-        self.assertGreater(response.input_tokens, 0)
-        self.assertGreater(response.output_tokens, 0)
+        candidates = []
+        if os.getenv("MISTRAL_API_KEY"):
+            candidates.append(
+                ("https://api.mistral.ai/v1", "codestral-latest", "MISTRAL_API_KEY")
+            )
+        if os.getenv("GROQ_API_KEY"):
+            candidates.append(
+                ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "GROQ_API_KEY")
+            )
+        if os.getenv("OPENROUTER_API_KEY"):
+            candidates.append(
+                (
+                    "https://openrouter.ai/api/v1",
+                    "nvidia/nemotron-3-ultra-550b-a55b:free",
+                    "OPENROUTER_API_KEY",
+                )
+            )
+
+        last_err = None
+        for provider_url, model_name, env_var in candidates:
+            client = LLMClient(
+                provider_url=provider_url,
+                model_name=model_name,
+                rotator=KeyRotator.from_env(env_var),
+                max_retries=1,
+            )
+            try:
+                response = client.generate(
+                    [{"role": "user", "content": "Say hello in one short sentence."}]
+                )
+                self.assertTrue(bool(response.content))
+                self.assertGreater(response.input_tokens, 0)
+                self.assertGreater(response.output_tokens, 0)
+                return
+            except RuntimeError as e:
+                last_err = e
+                continue
+
+        self.fail(f"All configured free providers failed: {last_err}")
 
 
 if __name__ == "__main__":

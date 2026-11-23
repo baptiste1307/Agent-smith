@@ -15,39 +15,86 @@ from pathlib import Path
 from typing import Any
 
 
-def _apply_patch_to_docker(cid: str, patch: str) -> bool:
-    """Apply unified git diff to /testbed inside a running container."""
-    with tempfile.NamedTemporaryFile("w", suffix=".diff", delete=False) as f:
-        f.write(patch)
-        temp_diff = f.name
+def _write_file_to_docker(cid: str, host_file: Path, container_file: str) -> bool:
+    """Write a host file into a container via stdin (avoids rootless Docker lchown errors)."""
+    parent_dir = str(Path(container_file).parent)
+    subprocess.run(
+        ["docker", "exec", cid, "mkdir", "-p", parent_dir],
+        capture_output=True,
+        timeout=15,
+    )
+    data = host_file.read_bytes()
+    res = subprocess.run(
+        ["docker", "exec", "-i", cid, "/bin/sh", "-c", 'cat > "$1"', "_", container_file],
+        input=data,
+        capture_output=True,
+        timeout=30,
+    )
+    return res.returncode == 0
+
+
+def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
+    """Sync modified files from host testbed into /testbed inside a running container.
+
+    Streams modified files via `docker exec -i` after resetting the container's
+    working tree, avoiding both `git apply` and rootless Docker `lchown` failures.
+    """
     try:
-        cp_res = subprocess.run(
-            ["docker", "cp", temp_diff, f"{cid}:/tmp/patch.diff"],
-            capture_output=True,
-        )
-        if cp_res.returncode != 0:
-            return False
-        # Reset uncommitted files first so patch applies cleanly
+        # Reset container working tree cleanly (mark /testbed safe first for newer git)
         subprocess.run(
-            ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "-c", "git checkout . && git clean -fd"],
+            [
+                "docker",
+                "exec",
+                "-w",
+                "/testbed",
+                cid,
+                "/bin/bash",
+                "-c",
+                "git config --global --add safe.directory /testbed 2>/dev/null || true; git checkout -- . && git clean -fd",
+            ],
             capture_output=True,
+            timeout=30,
         )
-        for apply_cmd in (
-            "git apply --whitespace=nowarn --verbose /tmp/patch.diff",
-            "git apply --3way /tmp/patch.diff",
-            "git apply --verbose --reject /tmp/patch.diff",
-            "patch --batch --fuzz=5 -p1 -i /tmp/patch.diff",
-        ):
-            res = subprocess.run(
-                ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "-c", apply_cmd],
+
+        # Find modified tracked files (unstaged + staged)
+        res = subprocess.run(
+            ["git", "-c", "core.fileMode=false", "diff", "--name-only", "HEAD"],
+            cwd=testbed,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        changed_files = [
+            line.strip() for line in res.stdout.splitlines() if line.strip()
+        ]
+        if not changed_files:
+            res2 = subprocess.run(
+                ["git", "-c", "core.fileMode=false", "diff", "--name-only"],
+                cwd=testbed,
                 capture_output=True,
+                text=True,
+                timeout=30,
             )
-            if res.returncode == 0:
-                return True
+            changed_files = [
+                line.strip() for line in res2.stdout.splitlines() if line.strip()
+            ]
+
+        for rel_path in changed_files:
+            host_file = testbed / rel_path
+            container_file = f"/testbed/{rel_path}"
+            if host_file.exists():
+                if not _write_file_to_docker(cid, host_file, container_file):
+                    return False
+            else:
+                # File was deleted on host
+                subprocess.run(
+                    ["docker", "exec", cid, "rm", "-f", container_file],
+                    capture_output=True,
+                    timeout=15,
+                )
+        return True
+    except Exception:
         return False
-    finally:
-        if os.path.exists(temp_diff):
-            os.remove(temp_diff)
 
 
 def get_testbed_path() -> Path:
@@ -115,9 +162,9 @@ def run_command(
         # Sync current changes to container before running command
         patch = get_patch()
         if patch:
-            success = _apply_patch_to_docker(cid, patch)
+            success = _sync_host_changes_to_docker(cid, get_testbed_path())
             if not success:
-                sync_warning = "Warning: Failed to sync host patch to Docker container (/tmp/patch.diff could not be applied). Command executed on unpatched code.\n"
+                sync_warning = "Warning: Failed to sync host edits to Docker container. Command executed on unpatched code.\n"
 
         container_workdir = "/testbed"
         try:
@@ -258,9 +305,9 @@ def run_tests(
         sync_warning = ""
         patch = get_patch()
         if patch:
-            success = _apply_patch_to_docker(cid, patch)
+            success = _sync_host_changes_to_docker(cid, get_testbed_path())
             if not success:
-                sync_warning = "Warning: Failed to sync host patch to Docker container (/tmp/patch.diff could not be applied). Tests executed on unpatched code.\n"
+                sync_warning = "Warning: Failed to sync host edits to Docker container. Tests executed on unpatched code.\n"
 
         if test_command:
             cmd_result = run_command(test_command, workdir=cwd, timeout=timeout)
@@ -268,12 +315,13 @@ def run_tests(
 
         eval_script = os.environ.get("EVAL_SCRIPT")
         if eval_script and eval_script.strip():
-            with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
-                f.write(eval_script)
-                temp_sh = f.name
             try:
-                subprocess.run(["docker", "cp", temp_sh, f"{cid}:/eval.sh"], check=False)
-                subprocess.run(["docker", "exec", "-w", "/testbed", cid, "chmod", "+x", "/eval.sh"], check=False)
+                subprocess.run(
+                    ["docker", "exec", "-i", cid, "/bin/sh", "-c", "cat > /eval.sh && chmod +x /eval.sh"],
+                    input=eval_script.encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                )
                 res = subprocess.run(
                     ["docker", "exec", "-w", "/testbed", cid, "/bin/bash", "/eval.sh"],
                     capture_output=True,
@@ -283,9 +331,6 @@ def run_tests(
                 return f"{sync_warning}{res.stdout}\n{res.stderr}".strip()
             except subprocess.TimeoutExpired:
                 return f"Error: Tests timed out after {timeout} seconds."
-            finally:
-                if os.path.exists(temp_sh):
-                    os.remove(temp_sh)
 
     # 1. Explicit command provided
     if test_command:

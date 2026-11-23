@@ -23,9 +23,9 @@ def main():
     )
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", default="liquid/lfm-2.5-2.6b:free")
+    parser.add_argument("--model-name", default="codestral-latest")
     parser.add_argument(
-        "--provider-url", default="https://openrouter.ai/api/v1"
+        "--provider-url", default="https://api.mistral.ai/v1"
     )
     parser.add_argument(
         "--mcp-server",

@@ -114,6 +114,37 @@ def run_command(
     return json.dumps(result, indent=2)
 
 
+@mcp.resource("swebench://repo-info")
+def swebench_repo_info() -> str:
+    """Return metadata about the active SWE-bench testbed repository."""
+    import os
+
+    testbed = os.environ.get("TESTBED_PATH", str(Path.cwd()))
+    status = _run_command("git status --short", workdir=testbed, timeout=15.0)
+    return json.dumps(
+        {
+            "testbed_path": testbed,
+            "docker_container_id": os.environ.get("DOCKER_CONTAINER_ID", ""),
+            "git_status": status.get("stdout", "").strip(),
+        },
+        indent=2,
+    )
+
+
+@mcp.prompt()
+def swebench_workflow(issue: str = "") -> str:
+    """Recommended step-by-step workflow for fixing a SWE-bench issue."""
+    return (
+        "Fix the repository issue step by step:\n"
+        "1. Explore the codebase with search_code / search_function_or_class_definition_in_code / list_files.\n"
+        "2. Read the relevant files with read_file to understand the root cause.\n"
+        "3. Apply a minimal fix with edit_file.\n"
+        "4. Verify with run_tests() or targeted pytest via run_command().\n"
+        "5. Submit with final_answer(get_patch()).\n"
+        + (f"\nIssue:\n{issue}" if issue else "")
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="MCP server for the SWE-bench benchmark."

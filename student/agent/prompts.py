@@ -211,15 +211,13 @@ The repository is in /testbed. Your changes to its files are the solution.
 {problem_statement}
 </issue>
 {hints}
-Work step by step, one small action per turn:
-1. Explore: find the files and functions related to the issue (search the code, then read the relevant parts).
-2. Understand: find the root cause of the bug before changing anything.
-3. Fix: make the smallest change that solves the issue. Do not modify the existing tests.
-4. Check: run the tests and read the result. If they fail, go back to step 2.
+Work efficiently (aim for 5-10 turns total):
+1. Explore: use search_code, search_function_or_class_definition_in_code, or list_files (never import os/subprocess). Read only the relevant line range with read_file(path, start_line, end_line).
+2. Fix: once you identify the root cause, immediately apply the minimal fix with edit_file. Do not modify existing test files.
+3. Verify: call run_tests() to run the official evaluation test suite.
+4. Submit: as soon as run_tests() passes and get_patch() is non-empty, immediately call final_answer(get_patch()) on the very next turn.
 
-Always print the result of each tool call so you can read it in the Observation. Work only from the repository and task context; do not fetch external issues, pull requests, or patches.
-
-When the tests pass and get_patch() is not empty, call final_answer(get_patch()) to submit your changes as a git patch."""
+Always print the result of each tool call (or leave it as a bare expression) so you see it in the Observation. Work only from the repository and task context; do not fetch external issues, pull requests, or patches."""
 
 
 def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:

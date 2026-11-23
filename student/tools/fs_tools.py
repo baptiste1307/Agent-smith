@@ -8,6 +8,7 @@ Implements the mandatory file system tools specified in Section V.5.1:
 All paths are resolved relative to TESTBED_PATH if not absolute.
 """
 
+import ast
 import os
 from pathlib import Path
 
@@ -100,8 +101,16 @@ def read_file(
             f"Error: start_line ({start_line}) is greater than total lines ({total_lines})."
         )
 
-    # If end_line is -1 or greater than total_lines, clamp to end of file
-    if end_line == -1 or end_line > total_lines:
+    # If end_line is -1, cap to 200 lines from start_line to avoid token bloat
+    truncated_lines = False
+    if end_line == -1:
+        max_default_end = start_line + 199
+        if total_lines > max_default_end:
+            actual_end = max_default_end
+            truncated_lines = True
+        else:
+            actual_end = total_lines
+    elif end_line > total_lines:
         actual_end = total_lines
     else:
         actual_end = end_line
@@ -113,6 +122,12 @@ def read_file(
     for lineno in range(start_line, actual_end + 1):
         line_content = lines[lineno - 1]
         output.append(f"{lineno}: {line_content}")
+
+    if truncated_lines:
+        output.append(
+            f"... (showing lines {start_line}-{actual_end} of {total_lines}; "
+            f"pass start_line and end_line to read further)"
+        )
 
     return "\n".join(output)
 
@@ -158,11 +173,22 @@ def edit_file(filepath: str | Path, old_str: str, new_str: str) -> str:
 
     try:
         path.write_text(updated, encoding="utf-8")
-        return f"File '{filepath}' updated successfully."
     except PermissionError:
         return f"Error: Permission denied writing to '{filepath}'."
     except Exception as e:
         return f"Error writing to '{filepath}': {e}"
+
+    # Explicit syntax feedback for Python files (required by subject Section V.1)
+    if path.suffix == ".py":
+        try:
+            ast.parse(updated, filename=str(path))
+        except SyntaxError as e:
+            return (
+                f"File '{filepath}' updated, WARNING: edit introduced a Python "
+                f"SyntaxError at line {e.lineno}: {e.msg}. Please fix it."
+            )
+
+    return f"File '{filepath}' updated successfully."
 
 
 def list_files(directory: str | Path = ".", pattern: str = "*") -> str:

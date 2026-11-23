@@ -135,6 +135,33 @@ class TestSandboxSecurity(unittest.TestCase):
         with self.assertRaises(SystemExit):
             execute(code, self.config)
 
+    def test_mcp_tool_not_subject_to_sandbox_timeout(self):
+        import time
+
+        def slow_mcp_tool():
+            time.sleep(1.5)
+            return "tool_finished"
+
+        short_cfg = SandboxConfig(
+            authorized_imports=[],
+            allowed_directories=[str(self.allowed_dir)],
+            max_execution_time_seconds=1,
+            max_memory_mb=128,
+        )
+        result = execute("print(slow_tool())", short_cfg, tools={"slow_tool": slow_mcp_tool})
+        self.assertIsNone(result["error"])
+        self.assertIn("tool_finished", result["output"])
+
+    def test_persistent_namespace(self):
+        from sandbox.sandbox import build_namespace
+
+        ns = build_namespace(self.config)
+        r1 = execute("x = 21 * 2", self.config, namespace=ns)
+        self.assertIsNone(r1["error"])
+        r2 = execute("print(x)", self.config, namespace=ns)
+        self.assertIsNone(r2["error"])
+        self.assertIn("42", r2["output"])
+
 
 if __name__ == "__main__":
     unittest.main()

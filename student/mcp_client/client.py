@@ -39,6 +39,8 @@ class MCPClient:
             )
 
         self._tools: list[Any] = []
+        self._resources: list[Any] = []
+        self._prompts: list[Any] = []
         self._ready = threading.Event()  # set by the thread once connected
 
         # The background thread runs its own event loop, forever
@@ -70,6 +72,14 @@ class MCPClient:
         async with Client(self._server) as client:
             self._client = client
             self._tools = (await client.list_tools()).tools
+            try:
+                self._resources = (await client.list_resources()).resources
+            except Exception:
+                self._resources = []
+            try:
+                self._prompts = (await client.list_prompts()).prompts
+            except Exception:
+                self._prompts = []
             self._ready.set()  # tell __init__ we are connected
             await self._stop.wait()  # keep the connection open
 
@@ -162,6 +172,51 @@ class MCPClient:
             return self._call_tool(name, arguments)
 
         return wrapper
+
+    def get_resources(self) -> list[dict[str, Any]]:
+        """Describe the resources exposed by the connected MCP server."""
+        return [
+            {
+                "uri": str(res.uri),
+                "name": res.name,
+                "description": res.description or "",
+            }
+            for res in self._resources
+        ]
+
+    def read_resource(self, uri: str) -> str:
+        """Read a resource by URI from the connected MCP server."""
+        future = asyncio.run_coroutine_threadsafe(
+            self._client.read_resource(uri), self._loop
+        )
+        result = future.result()
+        return "\n".join(
+            getattr(c, "text", str(c)) for c in result.contents
+        )
+
+    def get_prompts(self) -> list[dict[str, Any]]:
+        """Describe the prompts exposed by the connected MCP server."""
+        return [
+            {
+                "name": p.name,
+                "description": p.description or "",
+            }
+            for p in self._prompts
+        ]
+
+    def get_prompt(
+        self, name: str, arguments: dict[str, str] | None = None
+    ) -> str:
+        """Fetch a prompt template from the connected MCP server."""
+        future = asyncio.run_coroutine_threadsafe(
+            self._client.get_prompt(name, arguments or {}), self._loop
+        )
+        result = future.result()
+        parts = []
+        for msg in result.messages:
+            content = getattr(msg, "content", msg)
+            parts.append(getattr(content, "text", str(content)))
+        return "\n".join(parts)
 
     def get_wrappers(self) -> dict[str, Callable[..., str]]:
         """Create one wrapper per server tool, to put in the sandbox namespace.

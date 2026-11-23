@@ -58,6 +58,14 @@ class TestFSTools(unittest.TestCase):
         self.assertIn("Error:", res)
         self.assertIn("found 2 times", res)
 
+    def test_edit_file_syntax_warning(self):
+        test_file = self.temp_dir / "broken.py"
+        test_file.write_text("def foo():\n    return 1\n")
+
+        res = edit_file(test_file, old_str="return 1", new_str="return (1 +")
+        self.assertIn("WARNING", res)
+        self.assertIn("SyntaxError", res)
+
     def test_list_files(self):
         (self.temp_dir / "a.py").write_text("# a")
         (self.temp_dir / "b.txt").write_text("# b")

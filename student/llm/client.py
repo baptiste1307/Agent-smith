@@ -26,7 +26,7 @@ class LLMClient:
     model_name: str
     rotator: KeyRotator  # provides the currently used API key
     timeout_seconds: float = 60.0  # Max waiting time for HTTP request
-    max_retries: int = 12  # more retries to handle rate-limit waits
+    max_retries: int = 6  # bounded retries so rate limits don't exceed task timeout
 
     def __post_init__(self) -> None:
         if not self.provider_url.endswith("/chat/completions"):
@@ -70,33 +70,37 @@ class LLMClient:
         )
 
     @staticmethod
-    def _parse_retry_delay(response: httpx.Response) -> float:
+    def _parse_retry_delay(response: httpx.Response, attempt: int = 0) -> float:
         """Extract the recommended wait time from a rate-limit response.
 
         Checks (in order):
-        1. Retry-After header (seconds)
-        2. "try again in Xs" pattern in the response body
-        3. Default fallback of 60s
+        1. Retry-After header (seconds, capped at 45s)
+        2. "try again in Xs" pattern in the response body (capped at 45s)
+        3. Bounded exponential backoff fallback (5s, 10s, 15s, ... capped at 30s)
         """
         # 1. Retry-After header
         retry_after = response.headers.get("retry-after")
         if retry_after:
             try:
-                return max(float(retry_after), 1.0)
+                return min(max(float(retry_after), 1.0), 45.0)
             except ValueError:
                 pass
 
         # 2. Parse delay from error message body
         try:
             body = response.text
-            m = re.search(r"(?:try again in|retry after)\s+(\d+(?:\.\d+)?)\s*s", body, re.IGNORECASE)
+            m = re.search(
+                r"(?:try again in|retry after)\s+(\d+(?:\.\d+)?)\s*s",
+                body,
+                re.IGNORECASE,
+            )
             if m:
-                return max(float(m.group(1)), 1.0)
+                return min(max(float(m.group(1)), 1.0), 45.0)
         except Exception:
             pass
 
-        # 3. Fallback
-        return 60.0
+        # 3. Bounded backoff fallback
+        return min(5.0 * (attempt + 1), 30.0)
 
     def generate(
         self,
@@ -149,6 +153,26 @@ class LLMClient:
 
                 last_error = f"HTTP {response.status_code}: {response.text[:500]}"
 
+                # Some providers (e.g. Groq on gpt-oss) return HTTP 400 with
+                # `code: "tool_use_failed"` and the raw tool call inside `failed_generation`.
+                # Recover it as a <tool_call> block so the extraction layer can convert it.
+                if response.status_code == 400:
+                    try:
+                        err_obj = response.json().get("error", {})
+                        failed_gen = err_obj.get("failed_generation")
+                        if err_obj.get("code") == "tool_use_failed" and failed_gen:
+                            return LLMResponse(
+                                content=f"<tool_call>\n{failed_gen}\n</tool_call>",
+                                input_tokens=0,
+                                output_tokens=0,
+                                request_time_ms=elapsed_ms,
+                                retries=attempt,
+                                model_name=self.model_name,
+                                api_url=self.provider_url,
+                            )
+                    except Exception:
+                        pass
+
                 # Request errors (bad request, invalid key, forbidden, unknown
                 # model): retrying would give the same result, so stop now
                 if response.status_code in (400, 401, 403, 404):
@@ -168,7 +192,7 @@ class LLMClient:
                         continue
 
                     # All keys exhausted or single key: wait the cooldown specified by provider
-                    wait_secs = self._parse_retry_delay(response)
+                    wait_secs = self._parse_retry_delay(response, attempt=attempt)
                     print(f"[LLM] Rate limited on all keys (HTTP {response.status_code}). "
                           f"Waiting {wait_secs:.0f}s before retry {attempt + 1}/{self.max_retries}...")
                     time.sleep(wait_secs)

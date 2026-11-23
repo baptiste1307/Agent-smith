@@ -116,9 +116,9 @@ def main() -> None:
     )
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", default="liquid/lfm-2.5-2.6b:free")
+    parser.add_argument("--model-name", default="codestral-latest")
     parser.add_argument(
-        "--provider-url", default="https://openrouter.ai/api/v1"
+        "--provider-url", default="https://api.mistral.ai/v1"
     )
     parser.add_argument(
         "--mcp-server",
@@ -137,6 +137,13 @@ def main() -> None:
         ),
     )
 
+    parser.add_argument(
+        "--keep-recent-turns",
+        type=int,
+        default=10,
+        help="Number of recent observations to keep verbatim before pruning older turns.",
+    )
+
     args = parser.parse_args()
 
     with open(args.task_file, encoding="utf-8") as f:
@@ -153,7 +160,7 @@ def main() -> None:
                 print(f"[SWE-bench] Starting Docker container for image {task.docker_image}...")
                 docker_container = DockerContainer(
                     image_name=task.docker_image,
-                    container_name=f"agent_swe_{task.instance_id.replace('__', '_')}",
+                    container_name=f"agent_swe_{task.instance_id.replace('__', '_')}_{os.getpid()}",
                 )
                 docker_container.start()
                 temp_testbed_dir = tempfile.mkdtemp(prefix=f"swebench_{task.instance_id}_")
@@ -201,6 +208,7 @@ def main() -> None:
             provider_url=args.provider_url,
             max_iterations=30,
             tracker=tracker,
+            keep_recent_turns=args.keep_recent_turns,
         )
 
         patch = str(answer or "")

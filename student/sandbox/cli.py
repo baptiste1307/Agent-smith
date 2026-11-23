@@ -4,7 +4,7 @@ import argparse
 
 from mcp_client.client import MCPClient
 
-from .sandbox import load_config, execute
+from .sandbox import build_namespace, execute, load_config
 
 
 def main() -> None:
@@ -42,6 +42,7 @@ def main() -> None:
     wrappers = client.get_wrappers() if client else {}
 
     print(f"Available tools: {list(wrappers)}")
+    namespace = build_namespace(config, wrappers)
 
     try:
         while True:
@@ -58,7 +59,7 @@ def main() -> None:
             if code.strip() == "exit":
                 break
 
-            result = execute(code, config, wrappers)
+            result = execute(code, config, wrappers, namespace=namespace)
 
             if result["output"]:
                 print(result["output"], end="")  # already ends with a newline

@@ -229,12 +229,36 @@ class DockerContainer:
         return res.returncode == 0
 
     def copy_to_container(self, host_path: str | Path, container_path: str) -> bool:
-        """Copy files or directories from host into the container."""
+        """Copy a file or directory from host into the container.
+
+        For regular files, streams bytes via `docker exec -i` to avoid rootless
+        Docker `lchown` errors when the host UID exceeds the container's subuid range.
+        """
         if not self.container_id:
             raise RuntimeError("Container is not running.")
 
-        src = str(Path(host_path).resolve())
-        cmd = ["docker", "cp", src, f"{self.container_id}:{container_path}"]
+        src_path = Path(host_path).resolve()
+        if src_path.is_file():
+            data = src_path.read_bytes()
+            res = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "-i",
+                    self.container_id,
+                    "/bin/sh",
+                    "-c",
+                    'cat > "$1"',
+                    "_",
+                    container_path,
+                ],
+                input=data,
+                capture_output=True,
+                timeout=60,
+            )
+            return res.returncode == 0
+
+        cmd = ["docker", "cp", str(src_path), f"{self.container_id}:{container_path}"]
         res = subprocess.run(cmd, capture_output=True, timeout=60)
         return res.returncode == 0
 

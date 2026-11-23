@@ -25,6 +25,27 @@ def run_tests(
     return run_tests_mbpp(code, test_list, test_imports)
 
 
+@mcp.resource("mbpp://info")
+def mbpp_info() -> str:
+    """Overview of the MBPP benchmark constraints and available tools."""
+    return (
+        "MBPP Benchmark MCP Server.\n"
+        "Tools: run_tests(code, test_list, test_imports=[])\n"
+        "Limits: max 10 iterations, 6,000 input tokens, 1,500 output tokens, 120s timeout."
+    )
+
+
+@mcp.prompt()
+def mbpp_workflow(task_definition: str = "") -> str:
+    """Recommended step-by-step workflow for solving an MBPP task."""
+    return (
+        "Solve the MBPP task in 2 steps:\n"
+        "1. Write the function and test it with run_tests(code, test_list, test_imports).\n"
+        "2. Once all assertions pass, call final_answer(code).\n"
+        + (f"\nTask: {task_definition}" if task_definition else "")
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="MCP server for the MBPP benchmark."
