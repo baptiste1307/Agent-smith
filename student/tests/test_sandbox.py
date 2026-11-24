@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from models_public import SandboxConfig
-from sandbox.sandbox import execute
+from sandbox.sandbox import build_namespace, execute
 from sandbox.security import is_import_allowed, is_path_allowed
 
 
@@ -141,6 +141,33 @@ class TestSandboxSecurity(unittest.TestCase):
         result = execute(code, self.config)
         self.assertEqual(result["final_answer"], "42")
         self.assertIsNone(result["error"])
+
+    def test_final_answer_stops_execution(self):
+        code = "final_answer('a')\nprint('never printed')"
+        result = execute(code, self.config)
+        self.assertEqual(result["final_answer"], "a")
+        self.assertNotIn("never printed", result["output"])
+
+    def test_final_answer_survives_except_exception(self):
+        # Catching the stop signal must not lose the answer
+        code = (
+            "try:\n"
+            "    final_answer('kept')\n"
+            "except Exception:\n"
+            "    print('caught')\n"
+            "final_answer('second call ignored')\n"
+        )
+        result = execute(code, self.config)
+        self.assertEqual(result["final_answer"], "kept")
+        self.assertIn("caught", result["output"])
+        self.assertIsNone(result["error"])
+
+    def test_final_answer_resets_between_executions(self):
+        namespace = build_namespace(self.config)
+        first = execute("final_answer(1)", self.config, namespace=namespace)
+        second = execute("x = 2", self.config, namespace=namespace)
+        self.assertEqual(first["final_answer"], "1")
+        self.assertIsNone(second["final_answer"])
 
     def test_auto_print_bare_expression(self):
         # Tools or functions returning values should be auto-printed if the LLM

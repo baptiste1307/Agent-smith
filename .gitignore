@@ -153,6 +153,7 @@ crash.log
 .sass-cache/
 .eslintcache
 .parcel-cache/
+.mypy_cache/
 
 # =========================
 # Git

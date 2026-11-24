@@ -80,7 +80,7 @@ uv run python ../mcp_tools_mbpp.py --http --host 127.0.0.1 --port 8000
 uv run sandbox --mcp-server http://127.0.0.1:8000/mcp
 ```
 
-Type Python expressions or statements at the `>>>` prompt (variables persist across REPL entries, and all sandbox security restrictions remain enforced). Exit cleanly with `exit` or `Ctrl+D`.
+Type Python expressions or statements at the `>>>` prompt (variables persist across REPL entries, and all sandbox security restrictions remain enforced). Multi-line blocks (`def`, `for`, `try`...) continue on `...` lines and end with an empty line, like the Python REPL. When code is piped on stdin (`cat script.py | uv run sandbox`), it is split into top-level statements, each executed as one REPL entry with its own timeout. The generated tool manual is available as the `sandbox_manual` variable. Exit cleanly with `exit` or `Ctrl+D`.
 
 ### Running MCP Servers Standalone
 
@@ -237,7 +237,7 @@ Implemented from scratch in `student/agent/loop.py`, each iteration performs a f
    - Output truncation → caps sandbox stdout (10,000 chars) and observation text (4,000 chars, keeping the first 1,500 and last 2,500 chars to preserve test verdicts) with explicit character-count truncation notices.
    - Edit syntax error → `edit_file()` runs `ast.parse()` on `.py` files and warns immediately with the exact line number and `SyntaxError` message.
 6. **Termination & provenance logging (`student/llm/metrics.py`)**:
-   - Calling `final_answer(value)` raises `FinalAnswerException(BaseException)` so `except Exception:` in generated code cannot swallow termination.
+   - Calling `final_answer(value)` first records the answer (first call wins), then raises `FinalAnswerException` to stop the code. Because the answer is recorded before the raise, an `except Exception:` in generated code cannot lose it: it only lets the code continue after the call.
    - Every turn appends a `StepMetrics` entry (`step`, `input_tokens`, `output_tokens`, `request_time_ms`, `timestamp`, `api_url`, `model_name`, `llm_output`, `sandbox_input`, `sandbox_output`, `retries`) and verifies benchmark limits before continuing.
    - On completion (or error), `MetricsTracker.save_solution()` writes a validated `SolutionOutput` JSON file containing the full `system_prompt` and per-step trace for provenance verification.
 
@@ -284,7 +284,7 @@ All search tools format output as `/absolute/path_to_file.py:<line_number> <line
 - `run_command(command, workdir=None, timeout=120.0)`: Executes shell commands locally or inside the running SWE-bench Docker container (`DOCKER_CONTAINER_ID`), returning JSON `{"stdout", "stderr", "exit_code"}`.
 - `get_patch(repo_path=None)`: Runs `git -c core.fileMode=false diff` (falling back to `diff HEAD` if changes were staged) to produce the exact unified diff required by Section V.4.
 - `run_tests(test_command=None, workdir=None, timeout=300.0)`: Syncs modified host files directly into `/testbed` inside the container via `docker exec -i` (avoiding both `git apply` fragility and rootless Docker `lchown` UID errors), then executes the task's `EVAL_SCRIPT` (or explicit `test_command` / `EVAL_SCRIPT_PATH` / `/eval.sh` / `pytest`).
-- **Docker lifecycle & cleanup**: `DockerContainer` automatically pulls/starts the task image, syncs `/testbed`, and guarantees container removal via `finally`, `atexit`, and `SIGTERM`/`SIGINT` signal handlers (protecting against orphaned containers even under `moulinette_eval run-agent` hard timeouts).
+- **Docker lifecycle & cleanup**: `DockerContainer` automatically pulls/starts the task image, syncs `/testbed`, and guarantees container removal via `finally`, `atexit`, and `SIGTERM`/`SIGINT` signal handlers (protecting against orphaned containers even under `moulinette_eval run-agent` hard timeouts). Since `kill -9` cannot be caught, a detached watchdog process (own session) removes the container within ~1s of the agent's death, and also stops the agent if its `uv run` parent is killed; as a last resort the container runs `sleep 1800` with `--rm`, so it can never outlive 30 minutes. The repository only ever comes from the task's Docker image: there is no GitHub clone fallback (upstream history contains the fix), so without Docker the task fails with an explicit error in `solution.json`.
 
 ### MBPP Tool (`student/tools/mbpp_tools.py`)
 - `run_tests(code, test_list, test_imports=[])`: Executes candidate code against assertions inside an isolated Python subprocess and returns a JSON string `{"success": bool, "output": str}` with per-assertion failure diagnostics (including expected vs actual value hints).

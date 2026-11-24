@@ -171,7 +171,8 @@ def final_answer(answer: Any) -> None:
 
     Raises:
         FinalAnswerException: Always, to stop execution and hand the
-            answer to the agent loop.
+            answer to the agent loop. execute() replaces this function by
+            a version that also records the answer before raising.
     """
     raise FinalAnswerException(answer)
 
@@ -410,6 +411,19 @@ def execute(
                 if name not in ("__builtins__", "__name__", "final_answer"):
                     exec_namespace[name] = fn
 
+    # final_answer() records its argument here before raising, so the
+    # answer survives even if the code catches the exception
+    answer_box: list[str] = []
+
+    def recording_final_answer(answer: Any) -> None:
+        """Record the final answer (first call wins), then stop the code."""
+        if not answer_box:
+            answer_box.append(str(answer))
+        raise FinalAnswerException(answer_box[0])
+
+    recording_final_answer.__name__ = "final_answer"
+    exec_namespace["final_answer"] = recording_final_answer
+
     # Enforce AST-level security restrictions before execution
     try:
         parsed_tree = ast.parse(code)
@@ -477,6 +491,9 @@ def execute(
             except (ValueError, OSError):
                 pass
         network.unblock()  # restore network for the agent
+
+    if answer_box:  # also set when the code caught FinalAnswerException
+        answer = answer_box[0]
 
     text = output.getvalue()
 

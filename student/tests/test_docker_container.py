@@ -1,5 +1,6 @@
 """Tests for DockerContainer lifecycle and container management."""
 
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -35,8 +36,9 @@ class TestDockerContainer(unittest.TestCase):
         container = DockerContainer(image_name="test_img", auto_cleanup=False)
         self.assertTrue(container.pull_image())
 
+    @patch("subprocess.Popen")
     @patch("subprocess.run")
-    def test_start_and_stop_lifecycle(self, mock_run):
+    def test_start_and_stop_lifecycle(self, mock_run, mock_popen):
         # 1. Mock docker info success
         # 2. Mock image inspect success
         # 3. Mock docker run returning container ID
@@ -63,11 +65,55 @@ class TestDockerContainer(unittest.TestCase):
         cid = container.start()
         self.assertEqual(cid, "mock_cid_12345")
         self.assertEqual(container.container_id, "mock_cid_12345")
-        self.assertIn("mock_cid_12345", DockerContainer._active_containers)
+        self.assertIn("test_container", DockerContainer._active_containers)
+
+        # Bounded lifetime: auto-removed container with a finite idle command
+        run_cmd = next(
+            c.args[0] for c in mock_run.call_args_list if c.args[0][1] == "run"
+        )
+        self.assertIn("--rm", run_cmd)
+        self.assertEqual(run_cmd[-2:], ["sleep", "1800"])
+
+        # SIGKILL-proof watchdog: detached, watching this PID and container
+        mock_popen.assert_called_once()
+        watchdog_cmd = mock_popen.call_args.args[0]
+        self.assertEqual(
+            watchdog_cmd[-3:-1], [str(os.getpid()), "test_container"]
+        )
+        self.assertTrue(mock_popen.call_args.kwargs["start_new_session"])
 
         container.stop()
         self.assertIsNone(container.container_id)
-        self.assertNotIn("mock_cid_12345", DockerContainer._active_containers)
+        self.assertNotIn("test_container", DockerContainer._active_containers)
+
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    def test_stop_after_interrupted_docker_run(self, mock_run, mock_popen):
+        # The agent is interrupted while `docker run` waits: the container
+        # ID is never known, but the container may exist. stop() must still
+        # remove it by name, and the watchdog must already be running.
+        import subprocess as sp
+
+        def side_effect(cmd, *args, **kwargs):
+            if cmd[1] == "run":
+                raise sp.TimeoutExpired(cmd, 30)
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = side_effect
+        container = DockerContainer(
+            image_name="test_img", container_name="interrupted"
+        )
+        with self.assertRaises(sp.TimeoutExpired):
+            container.start()
+        self.assertIsNone(container.container_id)
+        mock_popen.assert_called_once()  # watchdog started before the run
+
+        container.stop()
+        self.assertIn(
+            ["docker", "rm", "-f", "interrupted"],
+            [c.args[0] for c in mock_run.call_args_list],
+        )
+        self.assertNotIn("interrupted", DockerContainer._active_containers)
 
 
 if __name__ == "__main__":

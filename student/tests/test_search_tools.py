@@ -52,6 +52,43 @@ class TestSearchTools(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn(str(py_file), lines[0])
 
+    def _make_nested_module(self):
+        pkg = self.temp_dir / "pkg" / "sub"
+        pkg.mkdir(parents=True)
+        target = pkg / "vector.py"
+        target.write_text("class Vector:\n    def __add__(self, o):\n")
+        (self.temp_dir / "other.py").write_text("def __add__(self, o):\n")
+        return target
+
+    def test_search_code_accepts_file_paths(self):
+        target = self._make_nested_module()
+        expected = f"{target}:2     def __add__(self, o):"
+        for file_pattern in (
+            "/testbed/pkg/sub/vector.py",  # path as seen in the container
+            str(target),  # absolute host path
+            "pkg/sub/vector.py",  # relative path
+            "./pkg/sub/vector.py",
+        ):
+            with self.subTest(file_pattern=file_pattern):
+                output = search_code(r"def __add__", file_pattern)
+                self.assertEqual(output, expected)
+
+    def test_search_code_accepts_directories(self):
+        target = self._make_nested_module()
+        for file_pattern in ("pkg/sub", "/testbed/pkg/", "/testbed"):
+            with self.subTest(file_pattern=file_pattern):
+                output = search_code(r"def __add__", file_pattern)
+                self.assertIn(str(target), output)
+        self.assertNotIn("other.py", search_code(r"def __add__", "pkg"))
+
+    def test_search_code_explains_empty_results(self):
+        self._make_nested_module()
+        no_file = search_code("Vector", "/testbed/missing.py")
+        self.assertTrue(no_file.startswith("No file matches file_pattern"))
+        no_line = search_code("zzz_not_there", "pkg/sub/vector.py")
+        self.assertTrue(no_line.startswith("No match for pattern"))
+        self.assertIn("1 file(s)", no_line)
+
     def test_search_code_handles_invalid_regex(self):
         file1 = self.temp_dir / "test.py"
         file1.write_text("result = [foo(x) for x in list]\n")
