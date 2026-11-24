@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from llm.client import LLMClient
+from llm.client import DEFAULT_MAX_TOKENS, LLMClient
 from llm.metrics import MetricsTracker
 from llm.rotator import KeyRotator
 from sandbox.sandbox import execute, load_config
@@ -118,13 +118,26 @@ def agent_loop(
     if tracker:
         tracker.system_prompt = system_prompt
 
+    def check_limits() -> None:
+        """Stop the run as soon as a benchmark limit is exceeded."""
+        if tracker:
+            exceeded, reason = tracker.check_limits()
+            if exceeded:
+                raise RuntimeError(f"Limit exceeded: {reason}")
+
     for turns in range(max_iterations):  # max turns
         prompt_messages = _prune_old_observations(
             messages, keep_recent_turns=keep_recent_turns
         )
+        # Never let one answer exceed the remaining output token budget
+        max_tokens = DEFAULT_MAX_TOKENS
+        remaining = tracker.remaining_output_tokens if tracker else None
+        if remaining is not None:
+            max_tokens = max(1, min(max_tokens, remaining))
         answer = client.generate(
             prompt_messages,
             stop=["Observation:"],
+            max_tokens=max_tokens,
         )  # 1. AI gives its answer
         # Some providers ignore `stop`: the LLM then invents the Observation
         # and keeps going. Keep only the text before the first Observation.
@@ -141,6 +154,7 @@ def agent_loop(
                     answer, sandbox_input="", sandbox_output=str(e)
                 )
             messages.append({"role": "user", "content": f"{e}"})
+            check_limits()
             continue
 
         result = execute(code, config, mcp_tools_wrappers)  # 3. Execute code
@@ -179,10 +193,7 @@ def agent_loop(
         messages.append({"role": "user", "content": observation})
 
         # 6. stop before the next turn if a limit is exceeded
-        if tracker:
-            exceeded, reason = tracker.check_limits()
-            if exceeded:
-                raise RuntimeError(f"Limit exceeded: {reason}")
+        check_limits()
 
     return None  # no final answer after max_iterations turns
 

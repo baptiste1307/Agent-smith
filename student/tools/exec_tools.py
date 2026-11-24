@@ -47,17 +47,32 @@ def _write_file_to_docker(
     return res.returncode == 0
 
 
-def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
-    """Sync modified files from host testbed into /testbed in a container.
+def _host_changed_files(testbed: Path) -> list[str]:
+    """Return the tracked files of the host testbed that differ from HEAD."""
+    for cmd in (
+        ["git", "-c", "core.fileMode=false", "diff", "--name-only", "HEAD"],
+        ["git", "-c", "core.fileMode=false", "diff", "--name-only"],
+    ):
+        res = subprocess.run(
+            cmd, cwd=testbed, capture_output=True, text=True, timeout=30
+        )
+        if res.returncode == 0:
+            lines = res.stdout.splitlines()
+            return [line.strip() for line in lines if line.strip()]
+    return []
 
-    Streams modified files via `docker exec -i` after resetting the
-    container's working tree, avoiding `git apply` and rootless Docker
-    `lchown` failures.
+
+def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
+    """Make the tracked files of /testbed in the container match the host.
+
+    The container's tracked files are reset to HEAD, then every file the
+    host changed is streamed in with `docker exec -i` (avoids `git apply`
+    and rootless Docker `lchown` failures). Untracked files of the
+    container (e.g. a reproduction script written with run_command) are
+    kept: `git clean` is not used.
     """
     try:
-        # Reset container working tree cleanly (mark /testbed safe first for
-        # newer git)
-        subprocess.run(
+        reset = subprocess.run(
             [
                 "docker",
                 "exec",
@@ -68,46 +83,16 @@ def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
                 "-c",
                 (
                     "git config --global --add safe.directory /testbed "
-                    "2>/dev/null || true; git checkout -- . && git clean -fd"
+                    "2>/dev/null || true; git reset -q && git checkout -- ."
                 ),
             ],
             capture_output=True,
             timeout=30,
         )
+        if reset.returncode != 0:
+            return False
 
-        # Find modified tracked files (unstaged + staged)
-        res = subprocess.run(
-            [
-                "git",
-                "-c",
-                "core.fileMode=false",
-                "diff",
-                "--name-only",
-                "HEAD",
-            ],
-            cwd=testbed,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        changed_files = [
-            line.strip() for line in res.stdout.splitlines() if line.strip()
-        ]
-        if not changed_files:
-            res2 = subprocess.run(
-                ["git", "-c", "core.fileMode=false", "diff", "--name-only"],
-                cwd=testbed,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            changed_files = [
-                line.strip()
-                for line in res2.stdout.splitlines()
-                if line.strip()
-            ]
-
-        for rel_path in changed_files:
+        for rel_path in _host_changed_files(testbed):
             host_file = testbed / rel_path
             container_file = f"/testbed/{rel_path}"
             if host_file.exists():
@@ -120,6 +105,71 @@ def _sync_host_changes_to_docker(cid: str, testbed: Path) -> bool:
                     capture_output=True,
                     timeout=15,
                 )
+        return True
+    except Exception:
+        return False
+
+
+def _sync_docker_changes_to_host(cid: str, testbed: Path) -> bool:
+    """Copy the tracked-file changes made in the container back to the host.
+
+    run_command executes inside the container: without this step, a file
+    modified there (sed -i, a Python script, git checkout...) would be
+    erased by the next _sync_host_changes_to_docker and would never appear
+    in get_patch(), which reads the host testbed.
+    """
+    try:
+        res = subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-w",
+                "/testbed",
+                cid,
+                "git",
+                "-c",
+                "core.fileMode=false",
+                "diff",
+                "--no-renames",
+                "--name-status",
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if res.returncode != 0:
+            return False
+
+        container_changed: set[str] = set()
+        for line in res.stdout.splitlines():
+            status, _, rel_path = line.partition("\t")
+            if not rel_path:
+                continue
+            container_changed.add(rel_path)
+            host_file = testbed / rel_path
+            if status.startswith("D"):
+                host_file.unlink(missing_ok=True)
+                continue
+            content = subprocess.run(
+                ["docker", "exec", cid, "cat", f"/testbed/{rel_path}"],
+                capture_output=True,
+                timeout=30,
+            )
+            if content.returncode != 0:
+                return False
+            host_file.parent.mkdir(parents=True, exist_ok=True)
+            host_file.write_bytes(content.stdout)
+
+        # Files changed on the host but restored in the container
+        # (e.g. `git checkout file`): restore them on the host too
+        for rel_path in set(_host_changed_files(testbed)) - container_changed:
+            subprocess.run(
+                ["git", "checkout", "HEAD", "--", rel_path],
+                cwd=testbed,
+                capture_output=True,
+                timeout=30,
+            )
         return True
     except Exception:
         return False
@@ -191,15 +241,13 @@ def run_command(
     cid = os.environ.get("DOCKER_CONTAINER_ID")
     if cid:
         sync_warning = ""
-        # Sync current changes to container before running command
-        patch = get_patch()
-        if patch:
-            success = _sync_host_changes_to_docker(cid, get_testbed_path())
-            if not success:
-                sync_warning = (
-                    "Warning: Failed to sync host edits to Docker container. "
-                    "Command executed on unpatched code.\n"
-                )
+        # Always sync, even with an empty patch: the container must not keep
+        # edits the host has reverted since the last command
+        if not _sync_host_changes_to_docker(cid, get_testbed_path()):
+            sync_warning = (
+                "Warning: Failed to sync host edits to Docker container. "
+                "Command executed on unpatched code.\n"
+            )
 
         container_workdir = "/testbed"
         try:
@@ -227,6 +275,12 @@ def run_command(
                 text=True,
                 timeout=timeout,
             )
+            if not _sync_docker_changes_to_host(cid, get_testbed_path()):
+                sync_warning += (
+                    "Warning: Failed to copy the files modified by this "
+                    "command back to the host: they will not be in "
+                    "get_patch().\n"
+                )
             return {
                 "stdout": proc.stdout,
                 "stderr": (sync_warning + proc.stderr).strip(),
@@ -244,9 +298,11 @@ def run_command(
                 else (e.stderr.decode() if e.stderr else "")
             )
             timeout_msg = f"\nCommand timed out after {timeout} seconds."
+            # Keep the edits made before the timeout
+            _sync_docker_changes_to_host(cid, get_testbed_path())
             return {
                 "stdout": stdout,
-                "stderr": (stderr + timeout_msg).strip(),
+                "stderr": (sync_warning + stderr + timeout_msg).strip(),
                 "exit_code": 124,
             }
         except Exception as e:
@@ -311,27 +367,26 @@ def get_patch(repo_path: str | Path | None = None) -> str:
         return ""
 
     try:
-        # 1. Unstaged changes
+        # Diff against HEAD: includes staged and unstaged changes, even when
+        # only part of them was staged with 'git add'
         res = subprocess.run(
-            ["git", "-c", "core.fileMode=false", "diff"],
+            ["git", "-c", "core.fileMode=false", "diff", "HEAD"],
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=30.0,
         )
         diff_output = res.stdout
-
-        # 2. If empty, check staged changes or diff against HEAD in case 'git
-        # add' was run
-        if not diff_output.strip():
-            res_head = subprocess.run(
-                ["git", "-c", "core.fileMode=false", "diff", "HEAD"],
+        if res.returncode != 0:
+            # No commit yet (no HEAD): fall back to the working tree diff
+            res = subprocess.run(
+                ["git", "-c", "core.fileMode=false", "diff"],
                 cwd=cwd,
                 capture_output=True,
                 text=True,
                 timeout=30.0,
             )
-            diff_output = res_head.stdout
+            diff_output = res.stdout
 
         return diff_output
     except Exception:
@@ -365,24 +420,21 @@ def run_tests(
 
     cid = os.environ.get("DOCKER_CONTAINER_ID")
     if cid:
-        sync_warning = ""
-        patch = get_patch()
-        if patch:
-            success = _sync_host_changes_to_docker(cid, get_testbed_path())
-            if not success:
-                sync_warning = (
-                    "Warning: Failed to sync host edits to Docker container. "
-                    "Tests executed on unpatched code.\n"
-                )
-
         if test_command:
+            # run_command syncs the host edits into the container itself
             cmd_result = run_command(
                 test_command, workdir=cwd, timeout=timeout
             )
             return (
-                f"{sync_warning}{cmd_result['stdout']}\n"
-                f"{cmd_result['stderr']}"
+                f"{cmd_result['stdout']}\n{cmd_result['stderr']}"
             ).strip()
+
+        sync_warning = ""
+        if not _sync_host_changes_to_docker(cid, get_testbed_path()):
+            sync_warning = (
+                "Warning: Failed to sync host edits to Docker container. "
+                "Tests executed on unpatched code.\n"
+            )
 
         eval_script = os.environ.get("EVAL_SCRIPT")
         if eval_script and eval_script.strip():

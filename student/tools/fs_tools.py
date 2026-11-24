@@ -59,6 +59,22 @@ def resolve_path(filepath: str | Path) -> Path:
     return (testbed / p).resolve()
 
 
+def _outside_testbed_error(path: Path, filepath: str | Path) -> str | None:
+    """Return an error message if path is outside the testbed repository.
+
+    The tools run outside the sandbox, on the host: without this check,
+    read_file("/home/user/project/.env") would hand host secrets (API keys)
+    to the LLM, and edit_file could modify any host file.
+    """
+    testbed = get_testbed_path()
+    if path == testbed or testbed in path.parents:
+        return None
+    return (
+        f"Error: Path '{filepath}' is outside the repository ({testbed}). "
+        "Only files inside /testbed can be accessed."
+    )
+
+
 def read_file(
     filepath: str | Path, start_line: int = 1, end_line: int = -1
 ) -> str:
@@ -75,6 +91,9 @@ def read_file(
         <line_number>: <line_content>
     """
     path = resolve_path(filepath)
+    outside = _outside_testbed_error(path, filepath)
+    if outside:
+        return outside
 
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
@@ -152,6 +171,9 @@ def edit_file(filepath: str | Path, old_str: str, new_str: str) -> str:
         return "Error: old_str cannot be empty."
 
     path = resolve_path(filepath)
+    outside = _outside_testbed_error(path, filepath)
+    if outside:
+        return outside
 
     if not path.exists():
         return f"Error: File '{filepath}' does not exist."
@@ -190,9 +212,9 @@ def edit_file(filepath: str | Path, old_str: str, new_str: str) -> str:
             ast.parse(updated, filename=str(path))
         except SyntaxError as e:
             return (
-                f"File '{filepath}' updated: edit introduced a Python "
-                f"SyntaxError at line {e.lineno}: {e.msg}."
-                " Please fix it."
+                f"WARNING: file '{filepath}' was updated, but the edit "
+                f"introduced a Python SyntaxError at line {e.lineno}: "
+                f"{e.msg}. Please fix it."
             )
 
     return f"File '{filepath}' updated successfully."
@@ -209,6 +231,9 @@ def list_files(directory: str | Path = ".", pattern: str = "*") -> str:
         Sorted list of absolute paths matching the pattern.
     """
     dir_path = resolve_path(directory)
+    outside = _outside_testbed_error(dir_path, directory)
+    if outside:
+        return outside
 
     if not dir_path.exists():
         return f"Error: Directory '{directory}' does not exist."

@@ -41,6 +41,231 @@ def is_import_allowed(name: str, authorized_imports: list[str]) -> bool:
     return False
 
 
+# Dunder attributes that ordinary code needs and that do not lead to
+# interpreter internals. Every other dunder (__self__, __globals__,
+# __subclasses__, __dict__, __traceback__, __loader__, ...) is refused.
+ALLOWED_DUNDER_ATTRS = frozenset(
+    {
+        "__init__",
+        "__name__",
+        "__qualname__",
+        "__doc__",
+        "__module__",
+        "__class__",
+        "__len__",
+        "__iter__",
+        "__next__",
+        "__contains__",
+        "__getitem__",
+        "__setitem__",
+        "__delitem__",
+        "__str__",
+        "__repr__",
+        "__format__",
+        "__hash__",
+        "__eq__",
+        "__ne__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
+        "__bool__",
+        "__call__",
+        "__enter__",
+        "__exit__",
+        "__add__",
+        "__sub__",
+        "__mul__",
+        "__truediv__",
+        "__floordiv__",
+        "__mod__",
+        "__pow__",
+        "__neg__",
+        "__pos__",
+        "__abs__",
+        "__and__",
+        "__or__",
+        "__xor__",
+        "__invert__",
+        "__lshift__",
+        "__rshift__",
+    }
+)
+
+# Non-dunder attributes that expose frames, code objects or a way to
+# evaluate a string as code.
+FORBIDDEN_PLAIN_ATTRS = frozenset(
+    {
+        # traceback / frame objects -> f_globals of the host modules
+        "tb_frame",
+        "tb_next",
+        "f_back",
+        "f_globals",
+        "f_locals",
+        "f_builtins",
+        "f_code",
+        "f_trace",
+        # generators / coroutines / async generators -> their frame
+        "gi_frame",
+        "gi_code",
+        "gi_yieldfrom",
+        "cr_frame",
+        "cr_code",
+        "cr_await",
+        "ag_frame",
+        "ag_code",
+        "ag_await",
+        # typing.ForwardRef evaluates an arbitrary string with eval()
+        "evaluate",
+        "_evaluate",
+        "_eval_type",
+    }
+)
+
+
+def is_attribute_forbidden(name: str) -> bool:
+    """Return True if sandboxed code must not read or write this attribute.
+
+    Args:
+        name: The attribute name.
+
+    Returns:
+        True for every dunder attribute outside ALLOWED_DUNDER_ATTRS and for
+        the frame / eval related attributes of FORBIDDEN_PLAIN_ATTRS.
+    """
+    if name.startswith("__") and name.endswith("__"):
+        return name not in ALLOWED_DUNDER_ATTRS
+    return name in FORBIDDEN_PLAIN_ATTRS
+
+
+def check_attribute(name: Any) -> None:
+    """Raise PermissionError if `name` is a forbidden attribute name.
+
+    Dotted names (as accepted by operator.attrgetter) are checked part by
+    part.
+    """
+    if not isinstance(name, str):
+        return
+    for part in name.split("."):
+        if is_attribute_forbidden(part):
+            raise PermissionError(
+                f"Access to attribute '{part}' is forbidden by sandbox "
+                "security policy."
+            )
+
+
+def make_safe_attr_builtins() -> dict[str, Callable[..., Any]]:
+    """Return getattr / setattr / delattr versions that check the name.
+
+    The AST validator only sees attribute names written literally in the
+    code: these wrappers also cover names built at runtime, such as
+    getattr(obj, "__sub" + "classes__").
+    """
+    real_getattr = getattr
+    real_setattr = setattr
+    real_delattr = delattr
+
+    def safe_getattr(obj: Any, name: str, *default: Any) -> Any:
+        check_attribute(name)
+        return real_getattr(obj, name, *default)
+
+    def safe_setattr(obj: Any, name: str, value: Any) -> None:
+        check_attribute(name)
+        real_setattr(obj, name, value)
+
+    def safe_delattr(obj: Any, name: str) -> None:
+        check_attribute(name)
+        real_delattr(obj, name)
+
+    return {
+        "getattr": safe_getattr,
+        "setattr": safe_setattr,
+        "delattr": safe_delattr,
+    }
+
+
+def _safe_attrgetter(*names: str) -> Callable[..., Any]:
+    """operator.attrgetter that refuses forbidden attribute names."""
+    import operator
+
+    for name in names:
+        check_attribute(name)
+    return operator.attrgetter(*names)
+
+
+def _safe_methodcaller(name: str, *args: Any, **kwargs: Any) -> Any:
+    """operator.methodcaller that refuses forbidden method names."""
+    import operator
+
+    check_attribute(name)
+    return operator.methodcaller(name, *args, **kwargs)
+
+
+# Public names of authorized modules that would give a way out of the
+# sandbox, removed from the module seen by sandboxed code.
+HIDDEN_MODULE_ATTRS: dict[str, frozenset[str]] = {
+    # evaluate annotation strings with eval()
+    "typing": frozenset(
+        {"get_type_hints", "ForwardRef", "evaluate_forward_ref"}
+    ),
+    # Formatter.get_field resolves "0.__self__" with the real getattr
+    "string": frozenset({"Formatter"}),
+}
+
+# Public names of authorized modules replaced by a checked version.
+MODULE_OVERRIDES: dict[str, dict[str, Any]] = {
+    "operator": {
+        "attrgetter": _safe_attrgetter,
+        "methodcaller": _safe_methodcaller,
+    },
+}
+
+
+def make_module_proxy(
+    module: types.ModuleType,
+    authorized_imports: list[str],
+    memo: dict[str, types.ModuleType] | None = None,
+) -> types.ModuleType:
+    """Build the restricted view of a module given to sandboxed code.
+
+    The proxy is a new module object holding only:
+    - public names (names starting with '_' are dropped, e.g. random._os,
+      collections._sys, math.__loader__);
+    - submodules that are themselves authorized (e.g. collections.abc with
+      "collections.*"), wrapped the same way. Modules imported by the
+      module for its own use (typing.sys, re.enum, json.codecs...) are
+      dropped, as they would reach os / sys / unrestricted open().
+
+    Args:
+        module: The real module.
+        authorized_imports: The import allowlist.
+        memo: Proxies already built during this call (handles cycles).
+
+    Returns:
+        The restricted module.
+    """
+    memo = {} if memo is None else memo
+    real_name = module.__name__
+    if real_name in memo:
+        return memo[real_name]
+
+    proxy = types.ModuleType(real_name, getattr(module, "__doc__", None))
+    memo[real_name] = proxy
+    hidden = HIDDEN_MODULE_ATTRS.get(real_name, frozenset())
+
+    for attr, value in list(vars(module).items()):
+        if attr.startswith("_") or attr in hidden:
+            continue
+        if isinstance(value, types.ModuleType):
+            if not is_import_allowed(value.__name__, authorized_imports):
+                continue
+            value = make_module_proxy(value, authorized_imports, memo)
+        proxy.__dict__[attr] = value
+
+    proxy.__dict__.update(MODULE_OVERRIDES.get(real_name, {}))
+    return proxy
+
+
 def make_safe_import(
     authorized_imports: list[str],
     original_import: Callable,
@@ -48,7 +273,8 @@ def make_safe_import(
     """Create a restricted version of builtins.__import__.
 
     Intercepts every 'import' or 'from ... import ...' statement executed
-    inside the sandbox and raises ImportError if the module is not authorized.
+    inside the sandbox, raises ImportError if the module is not authorized,
+    and returns a restricted proxy of the module (see make_module_proxy).
 
     Args:
         authorized_imports: The list of authorized import patterns.
@@ -65,8 +291,8 @@ def make_safe_import(
         fromlist: tuple = (),
         level: int = 0,
     ) -> Any:
-        # 1. Verify that the requested top-level module is authorized
-        if not is_import_allowed(name, authorized_imports):
+        # 1. Verify that the requested module is authorized
+        if level != 0 or not is_import_allowed(name, authorized_imports):
             raise ImportError(
                 f"Import of module '{name}' is not authorized by sandbox "
                 "policy."
@@ -75,24 +301,28 @@ def make_safe_import(
         # 2. Delegate to original import
         mod = original_import(name, globals, locals, fromlist, level)
 
-        # 3. When 'fromlist' is provided (e.g. 'from collections import abc'),
-        # verify that any imported submodule is also authorized
-        if fromlist:
-            for item in fromlist:
-                if isinstance(item, str):
-                    val = getattr(mod, item, None)
-                    if isinstance(val, types.ModuleType):
-                        full_submodule = f"{name}.{item}"
-                        if not is_import_allowed(
-                            full_submodule, authorized_imports
-                        ):
-                            raise ImportError(
-                                "Import of submodule "
-                                f"'{full_submodule}' is not authorized by "
-                                "sandbox policy."
-                            )
+        # 3. 'from X import a, b': private names are refused, and imported
+        # submodules must be authorized too. Checked on the real module:
+        # if a name is missing from the proxy, Python falls back to
+        # sys.modules["X.a"], which would bypass the proxy.
+        for item in fromlist or ():
+            if not isinstance(item, str) or item == "*":
+                continue
+            if item.startswith("_"):
+                raise ImportError(
+                    f"Import of private name '{item}' from '{name}' is not "
+                    "authorized by sandbox policy."
+                )
+            val = getattr(mod, item, None)
+            if isinstance(val, types.ModuleType) and not is_import_allowed(
+                val.__name__, authorized_imports
+            ):
+                raise ImportError(
+                    f"Import of submodule '{name}.{item}' is not authorized "
+                    "by sandbox policy."
+                )
 
-        return mod
+        return make_module_proxy(mod, authorized_imports)
 
     return safe_import
 

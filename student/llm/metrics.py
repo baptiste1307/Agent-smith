@@ -79,6 +79,19 @@ class MetricsTracker:
         return sum(1 + s.retries for s in self.steps)
 
     @property
+    def remaining_output_tokens(self) -> int | None:
+        """Output tokens still allowed by the benchmark limit.
+
+        Returns:
+            The remaining budget (never negative), or None if the
+            benchmark has no known limit.
+        """
+        limits = LIMITS.get(self.benchmark)
+        if not limits:
+            return None
+        return max(0, limits.max_output_tokens - self.total_output_tokens)
+
+    @property
     def elapsed_time_seconds(self) -> float:
         """Current elapsed wall-clock time in seconds."""
         return time.perf_counter() - self._start_perf

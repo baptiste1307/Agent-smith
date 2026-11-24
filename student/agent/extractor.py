@@ -18,7 +18,35 @@ import json
 import re
 from typing import Any
 
-OTHER_LABEL_PATTERN = r"```(?:[Pp][Yy](?:thon|THON)?3?)?[ \t]*\n(.*?)```"
+# Labels of a fenced block that are executed as Python: ```py, ```Python,
+# ```python3... or no label at all
+PYTHON_LIKE_LABEL = re.compile(r"(?:[Pp][Yy](?:thon|THON)?3?)?")
+
+
+def _fenced_blocks(text: str) -> list[tuple[str, str]]:
+    """Split text into its fenced code blocks, pairing fences in order.
+
+    The 1st ``` opens a block, the 2nd closes it, the 3rd opens the next
+    one, and so on, as Markdown does. A plain regex would also match from
+    the closing fence of a ```bash block to the next fence, and execute
+    the prose in between as Python.
+
+    Args:
+        text: The LLM answer.
+
+    Returns:
+        A list of (label, content) tuples, one per closed block. The
+        label is the text written right after the opening fence.
+    """
+    blocks: list[tuple[str, str]] = []
+    fences = [m.start() for m in re.finditer("```", text)]
+    for open_pos, close_pos in zip(fences[::2], fences[1::2], strict=False):
+        header_end = text.find("\n", open_pos + 3, close_pos)
+        if header_end == -1:  # ```inline``` on a single line: not a block
+            continue
+        label = text[open_pos + 3:header_end].strip()
+        blocks.append((label, text[header_end + 1:close_pos]))
+    return blocks
 
 
 def _format_python_call(func_name: str, args: dict[str, Any] | Any) -> str:
@@ -311,8 +339,11 @@ def extract_code(answer_content: str) -> tuple[str, str | None]:
             return "\n".join(code_blocks), None
 
     # 2. Closed blocks with another label (```py, ```Python, ``` alone...)
-    other_blocks = re.findall(OTHER_LABEL_PATTERN, cleaned_content, re.DOTALL)
-    other_code = [code.strip() for code in other_blocks if code.strip()]
+    other_code = [
+        code.strip()
+        for label, code in _fenced_blocks(cleaned_content)
+        if PYTHON_LIKE_LABEL.fullmatch(label) and code.strip()
+    ]
     if other_code:
         warning = (
             "Warning: your code block was not tagged ```python, it was "

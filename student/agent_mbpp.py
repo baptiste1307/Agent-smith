@@ -17,7 +17,7 @@ def _default_mcp_server_command() -> str:
     return f"{shlex.quote(sys.executable)} {shlex.quote(str(server_path))}"
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the Agent Smith MBPP agent."
     )
@@ -40,12 +40,15 @@ def main():
         # model_validate_json reads JSON and validates required fields.
         task = MBPPTaskInput.model_validate_json(f.read())
 
-    tracker = MetricsTracker(task_id=task.task_id, benchmark="mbpp")
+    tracker = MetricsTracker(task_id=str(task.task_id), benchmark="mbpp")
 
     server_cmd = args.mcp_server or _default_mcp_server_command()
-    mcp_client = MCPClient(server=server_cmd)
+    mcp_client: MCPClient | None = None
 
     try:
+        # Inside the try: if the MCP server fails to start, solution.json is
+        # still written with the error
+        mcp_client = MCPClient(server=server_cmd)
         answer = agent_loop(
             exercice=build_mbpp_task_prompt(task),
             mcp_tools_wrappers=mcp_client.get_wrappers(),
@@ -79,7 +82,8 @@ def main():
             error=str(e),
         )
     finally:
-        mcp_client.close()
+        if mcp_client is not None:
+            mcp_client.close()
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ from sandbox.security import (
     FinalAnswerException,
     NetworkBlocker,
     SandboxTimeoutError,
+    check_attribute,
+    make_safe_attr_builtins,
     make_safe_import,
     make_safe_open,
 )
@@ -41,41 +43,53 @@ FORBIDDEN_BUILTINS = (
     "license",
 )
 
-FORBIDDEN_ATTRS = {
-    "__subclasses__",
-    "__globals__",
-    "__builtins__",
-    "__code__",
-    "__bases__",
-    "__base__",
-    "__mro__",
-    "__func__",
-    "__closure__",
-}
+# Builtins dunder names that sandboxed code must not reach: __loader__
+# (BuiltinImporter) and __spec__ can load built-in modules such as posix
+FORBIDDEN_BUILTIN_DUNDERS = ("__loader__", "__spec__", "__package__")
+
+# Dunder names that sandboxed code may write as plain names
+ALLOWED_DUNDER_NAMES = frozenset({"__name__"})
 
 
 class SecurityASTValidator(ast.NodeVisitor):
-    """Enforce sandbox security rules at AST level."""
+    """Enforce sandbox security rules at AST level.
+
+    Rejects, before execution:
+    - forbidden attributes written literally (obj.__self__, e.f_back...);
+    - getattr / setattr / delattr / hasattr with a forbidden constant name;
+    - dunder names such as __builtins__ or __import__.
+    Names built at runtime are checked by the safe getattr family and the
+    module proxies (see sandbox.security).
+    """
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr in FORBIDDEN_ATTRS:
+        check_attribute(node.attr)
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if (
+            node.id.startswith("__")
+            and node.id.endswith("__")
+            and node.id not in ALLOWED_DUNDER_NAMES
+        ):
             raise PermissionError(
-                f"Access to attribute '{node.attr}' is forbidden by sandbox "
+                f"Access to name '{node.id}' is forbidden by sandbox "
                 "security policy."
             )
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        if isinstance(node.func, ast.Name) and node.func.id == "getattr":
+        if isinstance(node.func, ast.Name) and node.func.id in (
+            "getattr",
+            "setattr",
+            "delattr",
+            "hasattr",
+        ):
             if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
-                if node.args[1].value in FORBIDDEN_ATTRS:
-                    attr_value = node.args[1].value
-                    if isinstance(attr_value, bytes):
-                        attr_value = attr_value.decode("utf-8", "replace")
-                    raise PermissionError(
-                        f"Access to attribute '{attr_value}' is forbidden by "
-                        "sandbox security policy."
-                    )
+                attr_value = node.args[1].value
+                if isinstance(attr_value, bytes):
+                    attr_value = attr_value.decode("utf-8", "replace")
+                check_attribute(attr_value)
         self.generic_visit(node)
 
 
@@ -137,9 +151,11 @@ def build_safe_builtins(config: SandboxConfig) -> dict[str, Any]:
     safe_builtins["open"] = make_safe_open(
         config.allowed_directories, builtins.open
     )
+    # getattr / setattr / delattr check names built at runtime
+    safe_builtins.update(make_safe_attr_builtins())
 
     # Remove dangerous builtins (pop: some, like help/exit, may be absent)
-    for name in FORBIDDEN_BUILTINS:
+    for name in FORBIDDEN_BUILTINS + FORBIDDEN_BUILTIN_DUNDERS:
         safe_builtins.pop(name, None)
 
     return safe_builtins
@@ -237,6 +253,10 @@ def _auto_print_expressions(source: str) -> str:
     for stmt in tree.body:
         if isinstance(stmt, ast.Expr):
             val = stmt.value
+            # A bare string is a docstring or a comment, not a result
+            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                new_body.append(stmt)
+                continue
             # Don't wrap if already a print(...) or final_answer(...) call
             if isinstance(val, ast.Call):
                 func = val.func
@@ -405,7 +425,7 @@ def execute(
 
     sigalrm = getattr(signal, "SIGALRM")
     alarm = getattr(signal, "alarm")
-    signal.signal(sigalrm, on_timeout)
+    previous_handler = signal.signal(sigalrm, on_timeout)
     alarm(config.max_execution_time_seconds)  # start the timer
 
     # Allow the code max_memory_mb on top of what the process already uses
@@ -443,6 +463,12 @@ def execute(
         error = f"{type(e).__name__}: {e}"
     finally:
         alarm(0)  # always stop the timer so it cannot fire later
+        signal.signal(
+            sigalrm,
+            previous_handler
+            if previous_handler is not None
+            else signal.SIG_DFL,
+        )
         if old_limit is not None:
             try:
                 setrlimit = getattr(resource, "setrlimit")

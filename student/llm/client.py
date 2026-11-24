@@ -1,3 +1,4 @@
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -21,6 +22,15 @@ class LLMResponse:
     api_url: str  # url of api used
 
 
+DEFAULT_MAX_TOKENS = 1536
+
+# HTTP statuses for which retrying the same request cannot succeed:
+# bad request, invalid key, forbidden, unknown model, request too large
+# (e.g. Groq 413 when one request exceeds the tokens-per-minute limit),
+# unprocessable request
+NON_RETRYABLE_STATUSES = (400, 401, 403, 404, 413, 422)
+
+
 @dataclass
 class LLMClient:
     provider_url: str
@@ -42,6 +52,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         stop: list[str] | None = None,
         temperature: float = 0.0,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> tuple[dict[str, str], dict[str, Any]]:
         """Prepare HTTP headers and payload with current API key."""
         headers = {
@@ -52,7 +63,7 @@ class LLMClient:
             "model": self.model_name,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": 1536,
+            "max_tokens": max_tokens,
         }
         if stop:
             payload["stop"] = stop
@@ -113,13 +124,21 @@ class LLMClient:
         messages: list[dict[str, str]],
         stop: list[str] | None = None,
         temperature: float = 0.0,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResponse:
-        """Generate response from LLM with automatic retry and key rotation."""
+        """Generate response from LLM with automatic retry and key rotation.
+
+        Args:
+            messages: The conversation sent to the model.
+            stop: Optional stop sequences.
+            temperature: Sampling temperature.
+            max_tokens: Maximum number of tokens the model may generate.
+        """
         last_error = "no attempt made"  # kept to explain the final failure
 
         for attempt in range(self.max_retries + 1):
             headers, payload = self.prepare_message(
-                messages, stop, temperature
+                messages, stop, temperature, max_tokens
             )
 
             try:
@@ -141,12 +160,15 @@ class LLMClient:
                                 fn = tc.get("function", {})
                                 name = fn.get("name", "")
                                 args = fn.get("arguments", "{}")
+                                # Some providers send arguments as a JSON
+                                # string, others as an object: json.dumps
+                                # always produces valid JSON for the
+                                # <tool_call> extractor.
+                                call = json.dumps(
+                                    {"name": name, "arguments": args}
+                                )
                                 parts.append(
-                                    "<tool_call>\n"
-                                    '{'
-                                    f'"name": "{name}", "arguments": {args}'
-                                    '}'
-                                    "\n</tool_call>"
+                                    f"<tool_call>\n{call}\n</tool_call>"
                                 )
                             raw_content = "\n".join(parts)
                         else:
@@ -195,9 +217,9 @@ class LLMClient:
                     except Exception:
                         pass
 
-                # Request errors (bad request, invalid key, forbidden, unknown
-                # model): retrying would give the same result, so stop now
-                if response.status_code in (400, 401, 403, 404):
+                # Request errors: retrying would give the same result, so
+                # stop now
+                if response.status_code in NON_RETRYABLE_STATUSES:
                     raise RuntimeError(f"LLM request rejected: {last_error}")
 
                 # Case quota / rate limit (429, 402): rotate key and retry
