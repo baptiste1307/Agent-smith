@@ -51,9 +51,7 @@ def _prune_old_observations(
             if line.startswith("Error:") and line != "Error: None"
         ]
         err_note = f"\n{err_lines[0]}" if err_lines else "\nError: None"
-        pruned[idx][
-            "content"
-        ] = (
+        pruned[idx]["content"] = (
             "Observation:\n"
             "[Output of earlier turn omitted to keep context compact]"
             f"{err_note}"
@@ -164,7 +162,10 @@ def agent_loop(
                 tracker.record_step(
                     answer,
                     sandbox_input=code,
-                    sandbox_output=f"Final answer: {result['final_answer']}",
+                    sandbox_output=(
+                        f"{result['output']}"
+                        f"Final answer: {result['final_answer']}"
+                    ),
                 )
             return result["final_answer"]
 

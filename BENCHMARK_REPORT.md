@@ -47,7 +47,7 @@ Baseline agent configuration (`keep_recent_turns=3` observation pruning). A task
 | `codestral-latest` (Mistral) | `sympy__sympy-14711` | **PASS** | 12 | 31,133 | 1,071 | 324.0s | [solution.json](benchmark_results/mistral__codestral-latest/sympy__sympy-14711/solution.json) |
 | `codestral-latest` (Mistral) | `sympy__sympy-13480` | **PASS** | 4 | 7,247 | 265 | 96.3s | [solution.json](benchmark_results/mistral__codestral-latest/sympy__sympy-13480/solution.json) |
 | `codestral-latest` (Mistral) | `pydata__xarray-4629` | **PASS** | 8 | 26,671 | 769 | 227.4s | [solution.json](benchmark_results/mistral__codestral-latest/pydata__xarray-4629/solution.json) |
-| `ministral-14b-latest` (Mistral) | `sympy__sympy-14711` | FAIL *(timeout 420s)* | 0\* | 0\* | 0\* | 420.0s | [solution.json](benchmark_results/mistral__ministral-14b-latest/sympy__sympy-14711/solution.json) |
+| `ministral-14b-latest` (Mistral) | `sympy__sympy-14711` | FAIL *(broken pipe after 420s timeout)* | 16 | 54,666 | 2,358 | 454.9s | [solution.json](benchmark_results/mistral__ministral-14b-latest/sympy__sympy-14711/solution.json) |
 | `ministral-14b-latest` (Mistral) | `sympy__sympy-13480` | **PASS** | 4 | 7,290 | 331 | 148.7s | [solution.json](benchmark_results/mistral__ministral-14b-latest/sympy__sympy-13480/solution.json) |
 | `ministral-14b-latest` (Mistral) | `pydata__xarray-4629` | **PASS** | 5 | 14,624 | 599 | 122.0s | [solution.json](benchmark_results/mistral__ministral-14b-latest/pydata__xarray-4629/solution.json) |
 | `qwen/qwen3.8-27b` (Groq) | `sympy__sympy-14711` | **PASS** | 11 | 28,021 | 1,494 | 182.9s | [solution.json](benchmark_results/groq__qwen3.8-27b/sympy__sympy-14711/solution.json) |
@@ -62,15 +62,13 @@ Baseline agent configuration (`keep_recent_turns=3` observation pruning). A task
 | `openai/gpt-oss-20b` (Groq) | All 3 tasks | FAIL *(HTTP 400 `tool_use_failed`)* | 0 | 0 | 0 | 1.3–1.6s | [14711](benchmark_results/groq__gpt-oss-20b/sympy__sympy-14711/solution.json) / [13480](benchmark_results/groq__gpt-oss-20b/sympy__sympy-13480/solution.json) / [4629](benchmark_results/groq__gpt-oss-20b/pydata__xarray-4629/solution.json) |
 | `mistral-medium-latest` (Mistral) | All 3 tasks | FAIL *(HTTP 429 tier cap)* | 0 | 0 | 0 | 137.2–137.8s | [14711](benchmark_results/mistral__mistral-medium-latest/sympy__sympy-14711/solution.json) / [13480](benchmark_results/mistral__mistral-medium-latest/sympy__sympy-13480/solution.json) / [4629](benchmark_results/mistral__mistral-medium-latest/pydata__xarray-4629/solution.json) |
 
-*\*`ministral-14b-latest` on `sympy__sympy-14711` was killed by the benchmark runner's 420s timeout before writing its final `solution.json`, so recorded step counts are 0.*
-
 ### Per-Model Summary
 
 | Model | Provider | Solve Rate | Avg Iterations (completed) | Total Input Tokens | Total Output Tokens |
 |---|---|---:|---:|---:|---:|
 | **`codestral-latest`** | Mistral AI | **3 / 3 (100%)** | **8.0** | 65,051 | 2,105 |
 | **`qwen/qwen3.8-27b`** | Groq | **2 / 3 (67%)** | **7.7** | 56,202 | 2,305 |
-| **`ministral-14b-latest`** | Mistral AI | **2 / 3 (67%)** | **4.5** | 21,914 | 930 |
+| **`ministral-14b-latest`** | Mistral AI | **2 / 3 (67%)** | **8.3** | 76,580 | 3,288 |
 | **`openai/gpt-oss-120b`** | Groq | **1 / 3 (33%)** | **5.3** | 46,850 | 14,326 |
 | **`nvidia/nemotron-3-ultra-550b-a55b:free`** | OpenRouter | **0 / 3 (0%)** | **22.5** | 138,770 | 6,119 |
 | **`openai/gpt-oss-20b`** | Groq | **0 / 3 (0%)** | N/A | 0 | 0 |
@@ -83,7 +81,7 @@ Baseline agent configuration (`keep_recent_turns=3` observation pruning). A task
 | Model | Provider | Avg Request Latency | Total Retries (429/errors) | Availability During Benchmark | Observed Failure Mode |
 |---|---|---:|---:|---|---|
 | `codestral-latest` | Mistral AI | **877 ms** | 43 (across 24 steps) | **100%** (3/3 tasks completed) | Free tier 1 req/s rate limit (cleanly handled by retry backoff) |
-| `ministral-14b-latest` | Mistral AI | **1,303 ms** | 19 (across 9 recorded steps) | **67%** (2/3 completed, 1 runner timeout) | 1 req/s rate limit + long exploration loop on `14711` |
+| `ministral-14b-latest` | Mistral AI | **1,460 ms** | 43 (across 25 steps) | **67%** (2/3 completed, 1 broken pipe after timeout) | 1 req/s rate limit + long exploration loop on `14711` (16 steps) |
 | `mistral-medium-latest` | Mistral AI | N/A | 21 (7 × 3 failed attempts) | **0%** (blocked on free tier) | Persistent `HTTP 429` (`code: 1300`) on Experiment free tier |
 | `qwen/qwen3.8-27b` | Groq | **777 ms** | 17 (across 23 steps) | **83%** (2/3 completed, TPD cap at step 5 of task 3) | Fast per-request, but 200k tokens/day (TPD) & ~6k TPM limits |
 | `openai/gpt-oss-120b` | Groq | **2,516 ms** | 15 (across 16 steps) | **67%** (1 pass, 1 out-token cap, 1 HTTP 413) | Reasoning tokens eat output budget; strict 8,000 TPM single-request cap (`HTTP 413`) |
@@ -106,6 +104,7 @@ Measured directly from the recorded `steps` in each `solution.json` trace:
 | `codestral-latest` | `sympy__sympy-14711` | 3 | 10 | 11 | 12 | **1** | PASS |
 | `codestral-latest` | `sympy__sympy-13480` | 1 | 2 | 3 | 4 | **1** | PASS |
 | `codestral-latest` | `pydata__xarray-4629` | 3 | 6 | 7 | 8 | **1** | PASS |
+| `ministral-14b-latest` | `sympy__sympy-14711` | 4 | — | — | — | N/A | FAIL (broken pipe) |
 | `ministral-14b-latest` | `sympy__sympy-13480` | 1 | 2 | 3 | 4 | **1** | PASS |
 | `ministral-14b-latest` | `pydata__xarray-4629` | 2 | 3 | 4 | 5 | **1** | PASS |
 | `qwen/qwen3.8-27b` | `sympy__sympy-14711` | 1 | 8 | 9 | 11 | 2 | PASS |
@@ -118,7 +117,7 @@ Measured directly from the recorded `steps` in each `solution.json` trace:
 | `nemotron-3-ultra-550b` | `sympy__sympy-13480` | 1 | 2 | — | — | N/A | FAIL (daily cap) |
 
 **Analysis of intermediary behavior:**
-- **Exploration efficiency**: `qwen/qwen3.8-27b` consistently found and read the exact target file on **Step 1** across all 3 tasks (and even fixed + passed `pydata__xarray-4629` tests by Step 4 before hitting Groq's daily token cap). `codestral-latest` and `ministral-14b-latest` located the target file within Steps 1–3.
+- **Exploration efficiency**: `qwen/qwen3.8-27b` consistently found and read the exact target file on **Step 1** across all 3 tasks (and even fixed + passed `pydata__xarray-4629` tests by Step 4 before hitting Groq's daily token cap). `codestral-latest` located the target file within Steps 1–3, and `ministral-14b-latest` within Steps 1–4.
 - **Submission discipline**: `codestral-latest` and `ministral-14b-latest` achieved **$\Delta = 1$ on 100% of passing runs** — submitting `final_answer(get_patch())` immediately after `run_tests()` passed. In contrast, `qwen/qwen3.8-27b` consistently spent an extra turn inspecting `get_patch()` before calling `final_answer(get_patch())` ($\Delta = 2$), which cost it the 3rd task when its Groq daily token quota ran out right between Step 4 (`run_tests()` pass) and submission.
 - **Failure diagnosis on `nemotron-3-ultra-550b`**: Despite locating the right file on Step 1–2, it failed to convert exploration into a clean `edit_file` + `final_answer(get_patch())` sequence, burning 30 iterations and 101k input tokens on `sympy__sympy-14711`.
 
