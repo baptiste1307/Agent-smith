@@ -60,6 +60,72 @@ def _prune_old_observations(
     return pruned
 
 
+# Pessimistic characters-per-token ratio for the first request (English
+# text and code are usually closer to 3.5-4)
+INITIAL_CHARS_PER_TOKEN = 3.0
+# Safety factor on the input token estimate
+TOKEN_ESTIMATE_MARGIN = 1.10
+# Per-message overhead of the chat format (role, separators)
+TOKENS_PER_MESSAGE = 8
+# No request is sent with less output budget / time than this
+MIN_OUTPUT_TOKENS = 64
+MIN_TURN_SECONDS = 5.0
+
+
+def _message_chars(messages: list[dict[str, str]]) -> int:
+    """Total number of characters in the message contents."""
+    return sum(len(m.get("content", "")) for m in messages)
+
+
+def _estimate_input_tokens(
+    messages: list[dict[str, str]], chars_per_token: float
+) -> int:
+    """Estimate the input tokens of a request, rounded up with a margin."""
+    raw = _message_chars(messages) / chars_per_token
+    return int(raw * TOKEN_ESTIMATE_MARGIN) + TOKENS_PER_MESSAGE * len(
+        messages
+    )
+
+
+def _fit_input_budget(
+    messages: list[dict[str, str]],
+    keep_recent_turns: int,
+    remaining_input_tokens: int | None,
+    chars_per_token: float,
+) -> list[dict[str, str]]:
+    """Return the messages to send, pruned enough to fit the token budget.
+
+    Old observations are pruned as usual; if the request still does not
+    fit in the remaining input budget, fewer recent observations are kept
+    (down to the last one only).
+
+    Args:
+        messages: The full conversation.
+        keep_recent_turns: Observations normally kept in full.
+        remaining_input_tokens: Input tokens left, or None if unlimited.
+        chars_per_token: Calibrated characters-per-token ratio.
+
+    Returns:
+        The pruned conversation.
+
+    Raises:
+        RuntimeError: If even the most pruned conversation does not fit.
+    """
+    candidate = _prune_old_observations(messages, keep_recent_turns)
+    if remaining_input_tokens is None:
+        return candidate
+    estimate = 0
+    for keep in range(max(keep_recent_turns, 1), 0, -1):
+        candidate = _prune_old_observations(messages, keep)
+        estimate = _estimate_input_tokens(candidate, chars_per_token)
+        if estimate <= remaining_input_tokens:
+            return candidate
+    raise RuntimeError(
+        "Input token budget exhausted: the next request needs about "
+        f"{estimate} tokens, only {remaining_input_tokens} are left."
+    )
+
+
 def agent_loop(
     exercice: str,
     mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
@@ -124,20 +190,44 @@ def agent_loop(
             if exceeded:
                 raise RuntimeError(f"Limit exceeded: {reason}")
 
+    # Characters per input token, measured on the provider's answers.
+    # The first request uses a pessimistic value.
+    chars_per_token = INITIAL_CHARS_PER_TOKEN
+
     for turns in range(max_iterations):  # max turns
-        prompt_messages = _prune_old_observations(
-            messages, keep_recent_turns=keep_recent_turns
+        # 0. Check every budget BEFORE the request: the moulinette fails a
+        # task whose totals exceed a limit, even with a correct solution
+        prompt_messages = _fit_input_budget(
+            messages,
+            keep_recent_turns,
+            tracker.remaining_input_tokens if tracker else None,
+            chars_per_token,
         )
-        # Never let one answer exceed the remaining output token budget
         max_tokens = DEFAULT_MAX_TOKENS
         remaining = tracker.remaining_output_tokens if tracker else None
         if remaining is not None:
-            max_tokens = max(1, min(max_tokens, remaining))
+            if remaining < MIN_OUTPUT_TOKENS:
+                raise RuntimeError(
+                    f"Output token budget exhausted ({remaining} left)."
+                )
+            max_tokens = min(max_tokens, remaining)
+        time_left = tracker.time_left_seconds() if tracker else None
+        if time_left is not None and time_left < MIN_TURN_SECONDS:
+            raise RuntimeError(
+                f"Time budget exhausted ({max(time_left, 0):.0f}s left "
+                "before the benchmark timeout)."
+            )
+
         answer = client.generate(
             prompt_messages,
             stop=["Observation:"],
             max_tokens=max_tokens,
+            deadline=tracker.deadline if tracker else None,
         )  # 1. AI gives its answer
+        if answer.input_tokens > 0:
+            chars_per_token = _message_chars(prompt_messages) / (
+                answer.input_tokens
+            )
         # Some providers ignore `stop`: the LLM then invents the Observation
         # and keeps going. Keep only the text before the first Observation.
         content = (answer.content or "").split("Observation:", 1)[0].rstrip()
@@ -156,7 +246,19 @@ def agent_loop(
             check_limits()
             continue
 
-        result = execute(code, config, mcp_tools_wrappers)  # 3. Execute code
+        # Near the deadline, the sandboxed code gets only the time left
+        run_config = config
+        time_left = tracker.time_left_seconds() if tracker else None
+        if time_left is not None:
+            run_config = config.model_copy(
+                update={
+                    "max_execution_time_seconds": max(
+                        1,
+                        min(config.max_execution_time_seconds, int(time_left)),
+                    )
+                }
+            )
+        result = execute(code, run_config, mcp_tools_wrappers)  # 3. Execute
 
         if result["final_answer"] is not None:  # 4. Is AI Done ?
             if tracker:

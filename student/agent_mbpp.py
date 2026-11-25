@@ -1,5 +1,6 @@
 import argparse
 import shlex
+import signal
 import sys
 from pathlib import Path
 
@@ -17,7 +18,17 @@ def _default_mcp_server_command() -> str:
     return f"{shlex.quote(sys.executable)} {shlex.quote(str(server_path))}"
 
 
+def _exit_on_sigterm(signum: int, frame: object) -> None:
+    """Turn SIGTERM (sent by the moulinette on timeout) into SystemExit.
+
+    The finally blocks then run: solution.json is written and the MCP
+    server is closed instead of the process dying abruptly.
+    """
+    raise SystemExit(128 + signum)
+
+
 def main() -> None:
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     parser = argparse.ArgumentParser(
         description="Run the Agent Smith MBPP agent."
     )
@@ -49,6 +60,7 @@ def main() -> None:
         # Inside the try: if the MCP server fails to start, solution.json is
         # still written with the error
         mcp_client = MCPClient(server=server_cmd)
+        mcp_client.deadline = tracker.deadline
         answer = agent_loop(
             exercice=build_mbpp_task_prompt(task),
             mcp_tools_wrappers=mcp_client.get_wrappers(),
@@ -81,6 +93,14 @@ def main() -> None:
             solution="",
             error=str(e),
         )
+    except SystemExit:
+        tracker.save_solution(
+            filepath=args.output,
+            success=False,
+            solution="",
+            error="Agent terminated by a signal before finishing.",
+        )
+        raise
     finally:
         if mcp_client is not None:
             mcp_client.close()

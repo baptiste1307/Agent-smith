@@ -8,6 +8,7 @@ import os
 import resource
 import signal
 import sys
+import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from models_public import SandboxConfig
 from sandbox.security import (
     FinalAnswerException,
     NetworkBlocker,
+    SandboxMemoryError,
     SandboxTimeoutError,
     check_attribute,
     make_safe_attr_builtins,
@@ -57,6 +59,12 @@ FORBIDDEN_METHOD_NAMES = frozenset({"__exit__", "__aexit__"})
 
 # Period at which the timeout is raised again if the code keeps running
 TIMEOUT_RETRY_SECONDS = 0.2
+
+# macOS accepts RLIMIT_AS but its kernel does not enforce it: there, the
+# memory used by sandboxed code is measured with tracemalloc instead
+TRACK_MEMORY_WITH_TRACEMALLOC = sys.platform == "darwin"
+# CPU time between two memory checks (ITIMER_VIRTUAL / SIGVTALRM)
+MEMORY_CHECK_INTERVAL_SECONDS = 0.01
 
 
 class SecurityASTValidator(ast.NodeVisitor):
@@ -509,6 +517,35 @@ def execute(
     previous_handler = signal.signal(sigalrm, on_timeout)
     alarm(config.max_execution_time_seconds)  # start the timer
 
+    # Fallback memory limit where RLIMIT_AS is not enforced (macOS)
+    memory_limit = config.max_memory_mb * 1024 * 1024
+    track_memory = (
+        TRACK_MEMORY_WITH_TRACEMALLOC and not tracemalloc.is_tracing()
+    )
+    previous_vt_handler = None
+
+    def on_memory_check(signum: int, frame: Any) -> None:
+        """Stop the code once its peak memory exceeds the limit.
+
+        Raised again at every check while the code runs, like the
+        timeout, so catching it does not keep the memory.
+        """
+        if running and tracemalloc.get_traced_memory()[1] > memory_limit:
+            raise SandboxMemoryError(
+                f"Execution exceeded {config.max_memory_mb} MB."
+            )
+
+    if track_memory:
+        tracemalloc.start()
+        previous_vt_handler = signal.signal(
+            signal.SIGVTALRM, on_memory_check
+        )
+        signal.setitimer(
+            signal.ITIMER_VIRTUAL,
+            MEMORY_CHECK_INTERVAL_SECONDS,
+            MEMORY_CHECK_INTERVAL_SECONDS,
+        )
+
     # Allow the code max_memory_mb on top of what the process already uses
     try:
         getrlimit = getattr(resource, "getrlimit")
@@ -533,9 +570,11 @@ def execute(
             # by `except SandboxTimeoutError` below
             running = False
             alarm(0)
+            if track_memory:
+                signal.setitimer(signal.ITIMER_VIRTUAL, 0)
     except FinalAnswerException as e:
         answer = e.answer
-    except MemoryError:
+    except (MemoryError, SandboxMemoryError):
         error = f"MemoryError: Execution exceeded {config.max_memory_mb} MB."
     except SandboxTimeoutError:
         error = (
@@ -556,6 +595,24 @@ def execute(
             if previous_handler is not None
             else signal.SIG_DFL,
         )
+        if track_memory:
+            signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+            signal.signal(
+                signal.SIGVTALRM,
+                previous_vt_handler
+                if previous_vt_handler is not None
+                else signal.SIG_DFL,
+            )
+            # Covers a single big allocation done just before the end
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            if peak > memory_limit and error is None:
+                answer = None
+                answer_box.clear()
+                error = (
+                    f"MemoryError: Execution exceeded "
+                    f"{config.max_memory_mb} MB."
+                )
         if old_limit is not None:
             try:
                 setrlimit = getattr(resource, "setrlimit")

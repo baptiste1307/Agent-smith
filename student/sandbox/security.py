@@ -427,6 +427,14 @@ class SandboxSecurityError(PermissionError):
     pass
 
 
+class SandboxMemoryError(BaseException):
+    """Raised when sandboxed code exceeds the memory limit.
+
+    Only used where the kernel does not enforce RLIMIT_AS (macOS); a
+    BaseException, so that `except Exception:` cannot swallow it.
+    """
+
+
 class SandboxTimeoutError(BaseException):
     """Raised when sandboxed execution exceeds the configured time limit.
 

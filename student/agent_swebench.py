@@ -2,6 +2,7 @@ import argparse
 import os
 import shlex
 import shutil
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -31,7 +32,19 @@ def _looks_like_git_patch(text: str) -> bool:
     return bool(text.strip()) and all(marker in text for marker in markers)
 
 
+def _exit_on_sigterm(signum: int, frame: object) -> None:
+    """Turn SIGTERM (sent by the moulinette on timeout) into SystemExit.
+
+    The finally blocks then run: solution.json is written, the MCP server
+    closed and the Docker container removed. Once a container is started,
+    DockerContainer installs its own handler, which also ends in
+    SystemExit after its cleanup.
+    """
+    raise SystemExit(128 + signum)
+
+
 def main() -> None:
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     parser = argparse.ArgumentParser(
         description="Run the Agent Smith SWE-bench agent."
     )
@@ -152,6 +165,7 @@ def main() -> None:
         mcp_client = MCPClient(
             server=args.mcp_server or _default_mcp_server_command()
         )
+        mcp_client.deadline = tracker.deadline
 
         answer = agent_loop(
             exercice=build_swebench_task_prompt(
@@ -193,6 +207,14 @@ def main() -> None:
             solution="",
             error=str(e),
         )
+    except SystemExit:
+        tracker.save_solution(
+            filepath=args.output,
+            success=False,
+            solution="",
+            error="Agent terminated by a signal before finishing.",
+        )
+        raise
     finally:
         if mcp_client is not None:
             mcp_client.close()

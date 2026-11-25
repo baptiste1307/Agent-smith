@@ -40,6 +40,12 @@ LIMITS: dict[str, BenchmarkLimits] = {
 }
 
 
+# Part of the timeout kept free at the end of a run (5%, at least 10s):
+# 6s of 120s for MBPP becomes 10s, 45s of 900s for SWE-bench
+SAFETY_MARGIN_RATIO = 0.05
+MIN_SAFETY_MARGIN_SECONDS = 10.0
+
+
 class MetricsTracker:
     """Track execution metrics and format SolutionOutput."""
 
@@ -92,9 +98,49 @@ class MetricsTracker:
         return max(0, limits.max_output_tokens - self.total_output_tokens)
 
     @property
+    def remaining_input_tokens(self) -> int | None:
+        """Input tokens still allowed by the benchmark limit.
+
+        Returns:
+            The remaining budget (never negative), or None if the
+            benchmark has no known limit.
+        """
+        limits = LIMITS.get(self.benchmark)
+        if not limits:
+            return None
+        return max(0, limits.max_input_tokens - self.total_input_tokens)
+
+    @property
     def elapsed_time_seconds(self) -> float:
         """Current elapsed wall-clock time in seconds."""
         return time.perf_counter() - self._start_perf
+
+    @property
+    def deadline(self) -> float | None:
+        """time.perf_counter() value at which the agent must stop working.
+
+        It is the benchmark timeout minus a safety margin, kept to write
+        solution.json and clean up (MCP server, Docker container) before
+        the moulinette kills the process.
+
+        Returns:
+            The deadline, or None if the benchmark has no known limit.
+        """
+        limits = LIMITS.get(self.benchmark)
+        if not limits:
+            return None
+        margin = max(
+            MIN_SAFETY_MARGIN_SECONDS,
+            limits.max_time_seconds * SAFETY_MARGIN_RATIO,
+        )
+        return self._start_perf + limits.max_time_seconds - margin
+
+    def time_left_seconds(self) -> float | None:
+        """Seconds left before the deadline (negative once passed)."""
+        deadline = self.deadline
+        if deadline is None:
+            return None
+        return deadline - time.perf_counter()
 
     def record_step(
         self,

@@ -1,8 +1,10 @@
 import asyncio
+import concurrent.futures
 import os
 import shlex
 import sys
 import threading
+import time
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -20,6 +22,11 @@ except ImportError:  # older mcp 1.x releases
     from mcp.client.streamable_http import (  # type: ignore[assignment]
         streamablehttp_client as _http_client,
     )
+
+
+# Sandbox functions giving access to the server resources and prompts
+RESOURCE_HELPER = "read_mcp_resource"
+PROMPT_HELPER = "get_mcp_prompt"
 
 
 def _field(obj: Any, *names: str, default: Any = None) -> Any:
@@ -82,6 +89,9 @@ class MCPClient:
         self._resources: list[Any] = []
         self._prompts: list[Any] = []
         self._ready = threading.Event()  # set by the thread once connected
+        # Optional time.perf_counter() value: tool calls stop waiting
+        # for the server once it is reached (set by the agent loop)
+        self.deadline: float | None = None
 
         # The background thread runs its own event loop, forever
         self._loop = asyncio.new_event_loop()
@@ -143,6 +153,28 @@ class MCPClient:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()
 
+    def _wait(self, future: concurrent.futures.Future, what: str) -> Any:
+        """Wait for a server answer, at most until self.deadline.
+
+        Args:
+            future: The pending request, running in the background loop.
+            what: Name of the request, for the error message.
+
+        Raises:
+            TimeoutError: If the deadline is reached first.
+        """
+        wait: float | None = None
+        if self.deadline is not None:
+            wait = max(0.0, self.deadline - time.perf_counter())
+        try:
+            return future.result(timeout=wait)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise TimeoutError(
+                f"{what} did not answer before the agent's time budget "
+                "ran out. Submit your best answer now."
+            ) from None
+
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Call a tool on the server and wait for its answer.
 
@@ -162,7 +194,7 @@ class MCPClient:
         future = asyncio.run_coroutine_threadsafe(
             self._client.call_tool(name, arguments), self._loop
         )
-        result = future.result()  # wait for the server answer
+        result = self._wait(future, f"Tool '{name}'")
 
         text = "\n".join(
             getattr(content, "text", str(content))
@@ -175,11 +207,14 @@ class MCPClient:
     def get_schemas(self) -> list[dict[str, Any]]:
         """Describe the server tools, in the format used by the prompt.
 
+        Server resources and prompts are described too, as the two helper
+        functions of get_wrappers() that give access to them.
+
         Returns:
             One dict per tool, with its "name", "description" and
             "inputSchema" (the JSON Schema of its parameters).
         """
-        return [
+        schemas = [
             {
                 "name": tool.name,
                 "description": tool.description,
@@ -189,6 +224,57 @@ class MCPClient:
             }
             for tool in self._tools
         ]
+        return schemas + self._helper_schemas()
+
+    def _helper_schemas(self) -> list[dict[str, Any]]:
+        """Schemas of the resource / prompt helpers, built from the server.
+
+        A helper is only described when the server exposes something it
+        gives access to, and when no server tool already uses its name.
+        """
+        tool_names = {tool.name for tool in self._tools}
+        schemas: list[dict[str, Any]] = []
+        resources = self.get_resources()
+        if resources and RESOURCE_HELPER not in tool_names:
+            listing = "\n".join(
+                f"- {r['uri']}: {r['description'] or r['name']}"
+                for r in resources
+            )
+            schemas.append(
+                {
+                    "name": RESOURCE_HELPER,
+                    "description": (
+                        "Read an MCP resource of the server. Available:\n"
+                        f"{listing}"
+                    ),
+                    "inputSchema": {
+                        "properties": {"uri": {"type": "string"}},
+                        "required": ["uri"],
+                    },
+                }
+            )
+        prompts = self.get_prompts()
+        if prompts and PROMPT_HELPER not in tool_names:
+            listing = "\n".join(
+                f"- {p['name']}: {p['description']}" for p in prompts
+            )
+            schemas.append(
+                {
+                    "name": PROMPT_HELPER,
+                    "description": (
+                        "Get an MCP prompt of the server, filled with "
+                        f"arguments (dict of str). Available:\n{listing}"
+                    ),
+                    "inputSchema": {
+                        "properties": {
+                            "name": {"type": "string"},
+                            "arguments": {"type": "object", "default": {}},
+                        },
+                        "required": ["name"],
+                    },
+                }
+            )
+        return schemas
 
     def _make_wrapper(
         self, name: str, param_names: list[str]
@@ -248,7 +334,7 @@ class MCPClient:
         future = asyncio.run_coroutine_threadsafe(
             self._client.read_resource(AnyUrl(uri)), self._loop
         )
-        result = future.result()
+        result = self._wait(future, f"Resource '{uri}'")
         return "\n".join(getattr(c, "text", str(c)) for c in result.contents)
 
     def get_prompts(self) -> list[dict[str, Any]]:
@@ -268,7 +354,7 @@ class MCPClient:
         future = asyncio.run_coroutine_threadsafe(
             self._client.get_prompt(name, arguments or {}), self._loop
         )
-        result = future.result()
+        result = self._wait(future, f"Prompt '{name}'")
         parts = []
         for msg in result.messages:
             content = getattr(msg, "content", msg)
@@ -287,5 +373,12 @@ class MCPClient:
             schema = _field(tool, "inputSchema", "input_schema", default={})
             param_names = list((schema or {}).get("properties", {}))
             wrappers[tool.name] = self._make_wrapper(tool.name, param_names)
+
+        # Resources and prompts, through the helpers of _helper_schemas()
+        for schema in self._helper_schemas():
+            if schema["name"] == RESOURCE_HELPER:
+                wrappers[RESOURCE_HELPER] = self.read_resource
+            elif schema["name"] == PROMPT_HELPER:
+                wrappers[PROMPT_HELPER] = self.get_prompt
 
         return wrappers

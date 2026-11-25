@@ -30,6 +30,9 @@ DEFAULT_MAX_TOKENS = 1536
 # unprocessable request
 NON_RETRYABLE_STATUSES = (400, 401, 403, 404, 413, 422)
 
+# Below this many seconds before the deadline, no new request is sent
+MIN_REQUEST_SECONDS = 3.0
+
 
 @dataclass
 class LLMClient:
@@ -74,14 +77,48 @@ class LLMClient:
         self,
         headers: dict[str, str],
         payload: dict[str, Any],
+        timeout: float | None = None,
     ) -> httpx.Response:
-        """Send HTTP POST request to endpoint."""
+        """Send HTTP POST request to endpoint.
+
+        Args:
+            headers: HTTP headers (with the API key).
+            payload: JSON body of the request.
+            timeout: HTTP timeout in seconds; defaults to timeout_seconds.
+        """
         return httpx.post(
             self.endpoint,
             json=payload,
             headers=headers,
-            timeout=self.timeout_seconds,
+            timeout=self.timeout_seconds if timeout is None else timeout,
         )
+
+    def _time_budget(self, deadline: float | None, last_error: str) -> float:
+        """Return the HTTP timeout allowed by the deadline.
+
+        Args:
+            deadline: time.perf_counter() value not to exceed, or None.
+            last_error: Error of the previous attempt, for the message.
+
+        Raises:
+            RuntimeError: If too little time is left for a request.
+        """
+        if deadline is None:
+            return self.timeout_seconds
+        left = deadline - time.perf_counter()
+        if left < MIN_REQUEST_SECONDS:
+            raise RuntimeError(
+                "Time budget exhausted before the LLM answered "
+                f"({max(left, 0):.1f}s left). Last error: {last_error}"
+            )
+        return min(self.timeout_seconds, left)
+
+    @staticmethod
+    def _sleep(seconds: float, deadline: float | None) -> None:
+        """Wait before a retry, without going past the deadline."""
+        if deadline is not None:
+            seconds = min(seconds, max(0.0, deadline - time.perf_counter()))
+        time.sleep(seconds)
 
     @staticmethod
     def _parse_retry_delay(
@@ -125,6 +162,7 @@ class LLMClient:
         stop: list[str] | None = None,
         temperature: float = 0.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        deadline: float | None = None,
     ) -> LLMResponse:
         """Generate response from LLM with automatic retry and key rotation.
 
@@ -133,17 +171,25 @@ class LLMClient:
             stop: Optional stop sequences.
             temperature: Sampling temperature.
             max_tokens: Maximum number of tokens the model may generate.
+            deadline: Optional time.perf_counter() value: requests and
+                retry waits are shortened so that generate() never runs
+                past it.
+
+        Raises:
+            RuntimeError: If the request is rejected, if every retry
+                failed, or if the deadline leaves no time for a request.
         """
         last_error = "no attempt made"  # kept to explain the final failure
 
         for attempt in range(self.max_retries + 1):
+            http_timeout = self._time_budget(deadline, last_error)
             headers, payload = self.prepare_message(
                 messages, stop, temperature, max_tokens
             )
 
             try:
                 start_time = time.perf_counter()
-                response = self.send_message(headers, payload)
+                response = self.send_message(headers, payload, http_timeout)
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
 
                 # Success case 200 OK
@@ -240,7 +286,7 @@ class LLMClient:
                             f"({self.rotator.current_index + 1}/{num_keys}), "
                             "retrying in 0.5s..."
                         )
-                        time.sleep(0.5)
+                        self._sleep(0.5, deadline)
                         continue
 
                     # All keys exhausted or single key: wait the cooldown
@@ -254,15 +300,15 @@ class LLMClient:
                         f"Waiting {wait_secs:.0f}s before retry "
                         f"{attempt + 1}/{self.max_retries}..."
                     )
-                    time.sleep(wait_secs)
+                    self._sleep(wait_secs, deadline)
                     continue
 
                 # Server error (ex: 500)
-                time.sleep(1)
+                self._sleep(1, deadline)
 
             except (httpx.TimeoutException, httpx.NetworkError) as e:
                 last_error = f"{type(e).__name__}: {e}"
-                time.sleep(1)
+                self._sleep(1, deadline)
 
         raise RuntimeError(
             f"Failed after {self.max_retries + 1} attempts. "

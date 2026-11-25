@@ -298,6 +298,38 @@ class TestSandboxSecurity(unittest.TestCase):
         self.assertIsNotNone(result["error"])
         self.assertIn("MemoryError", result["error"])
 
+    def test_memory_hog_stopped_even_if_caught(self):
+        small_mem = SandboxConfig(
+            authorized_imports=[],
+            allowed_directories=[str(self.allowed_dir)],
+            max_execution_time_seconds=3,
+            max_memory_mb=64,
+        )
+        code = (
+            "data = []\n"
+            "while True:\n"
+            "    try:\n"
+            "        data.append(bytearray(8 * 1024 * 1024))\n"
+            "    except Exception:\n"
+            "        pass\n"
+        )
+        result = execute(code, small_mem)
+        self.assertIsNotNone(result["error"])
+        self.assertIn("Error", result["error"])
+
+    def test_memory_limit_cancels_final_answer(self):
+        small_mem = SandboxConfig(
+            authorized_imports=[],
+            allowed_directories=[str(self.allowed_dir)],
+            max_execution_time_seconds=3,
+            max_memory_mb=64,
+        )
+        result = execute(
+            "buf = bytearray(256 * 1024 * 1024)\nfinal_answer('x')", small_mem
+        )
+        self.assertIn("MemoryError", result["error"] or "")
+        self.assertIsNone(result["final_answer"])
+
     def test_propagation_keyboard_interrupt(self):
         # KeyboardInterrupt must NOT be caught as a normal string error
         code = "raise KeyboardInterrupt()"
