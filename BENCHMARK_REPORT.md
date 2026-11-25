@@ -163,10 +163,10 @@ Each ablation varies **exactly one agent variable** on the **exact same model an
 | # | Ablation Axis (Baseline → Variant) | Model ($n$ tasks) | Pass Rate | Iterations ($\Delta\%$, $d_z$, $p_{\text{perm}}$) | Input Tokens ($\Delta\%$, $d_z$, $p_{\text{perm}}$) | Output Tokens ($\Delta\%$, $d_z$, $p_{\text{perm}}$) | Wall Time ($\Delta\%$, $d_z$, $p_{\text{perm}}$) |
 |---|---|---|---:|---:|---:|---:|---:|
 | **1** | **Context pruning** (`k=3` → `k=99`) | `codestral-latest` ($n=3$) | `3/3 → 3/3` | `-29.2%` (`d_z=-0.66`, `p=0.50`) | **`-39.5%`** (`d_z=-0.85`, `p=0.50`) | **`-45.4%`** (`d_z=-0.96`, `p=0.50`) | **`-37.0%`** (`d_z=-0.81`, `p=0.50`) |
-| **2** | **Workflow prompt** (`structured` → `minimal`) | `qwen/qwen3.8-27b` ($n=3$) | **`3/3 → 1/3`** | `-37.5%*` *(2 early fails)* | `-48.8%*` *(2 early fails)* | **`+81.2%`** (`d_z=+0.64`, `p=0.50`) | **`+109.1%`** (`d_z=+0.68`, `p=0.50`) |
+| **2** | **Workflow prompt** (`structured` → `minimal`) | `qwen/qwen3.8-27b` ($n=3$) | **`3/3 → 1/3`** | `+50.0%*` (`d_z=+0.33`, `p=0.75`) | **`+126.4%*`** (`d_z=+0.46`, `p=0.75`) | **`+141.0%`** (`d_z=+2.01`, `p=0.25`) | **`+203.7%`** (`d_z=+0.63`, `p=0.50`) |
 | **3** | **Per-turn obs cap** (`4000` → `1500` chars) | `qwen/qwen3.8-27b` ($n=3$) | `3/3 → 3/3` | `+8.3%` (`d_z=+0.32`, `p=1.00`) | `+0.4%` (`d_z=+0.01`, `p=1.00`) | `-9.7%` (`d_z=-0.51`, `p=0.75`) | **`+49.1%`** (`d_z=+1.09`, `p=0.25`) |
 
-*\*In Ablation 2, aggregate iterations/input tokens appear lower only because `minimal` failed early (0 saved steps on 480s timeout for `django-11066`, and 2-step TPM explosion on `sympy-14711`). On the lone mutually-completed task (`sympy-13480`), `minimal` increased iterations by **+85.7%** and input tokens by **+91.9%**.*
+*\*In Ablation 2, the variant's iteration/input-token totals are still *under*-estimated: `minimal` stopped after 2 steps on `sympy-14711` (Groq TPM limit). The `django-11066` variant was re-run on 2026-11-25: the original run had been killed at 480s by the benchmark harness, which wrote a placeholder `solution.json` with no steps. On the lone mutually-completed task (`sympy-13480`), `minimal` increased iterations by **+85.7%** and input tokens by **+91.9%**.*
 
 ---
 
@@ -199,12 +199,12 @@ Each ablation varies **exactly one agent variable** on the **exact same model an
 | `sympy__sympy-13480` | **Baseline (`structured`)** | **PASS** | **7** | **14,729** | **425** | **114.8s** | Step 5 |
 | `sympy__sympy-13480` | Variant (`minimal`) | PASS | 13 (+86%) | 28,258 (+92%) | 962 (+126%) | 185.5s (+62%) | *(never called)* |
 | `django__django-11066` | **Baseline (`structured`)** | **PASS** | **6** | **20,265** | **307** | **98.4s** | Step 4 |
-| `django__django-11066` | Variant (`minimal`) | **FAIL** *(480s timeout)* | 0 | 0 | 0 | 480.2s | — |
+| `django__django-11066` | Variant (`minimal`) | **FAIL** *(no patch; stopped at the 855s time budget, Groq ITPM 429)* | 21 | 110,441 | 1,330 | 855.0s | *(called, never passed)* |
 | `sympy__sympy-14711` | **Baseline (`structured`)** | **PASS** | **11** | **28,021** | **1,494** | **182.9s** | Step 9 |
 | `sympy__sympy-14711` | Variant (`minimal`) | **FAIL** *(HTTP 429 TPM)* | 2 | 3,985 | 3,072 | 162.4s | — |
-| **SUMMARY** | **Baseline → Minimal** | **`3/3` → `1/3`** | — | — | `2,226 → 4,034 (+81%)` | `396.0s → 828.1s (+109%)` | — |
+| **SUMMARY** | **Baseline → Minimal** | **`3/3` → `1/3`** | `24 → 36 (+50%)` | `63,015 → 142,684 (+126%)` | `2,226 → 5,364 (+141%)` | `396.1s → 1,202.9s (+204%)` | — |
 
-**Finding & Root-Cause Trace Analysis**: Removing the 4-phase workflow caused solve rate to drop from **100% (`3/3`, CI `[43.8%, 100%]`) to 33.3% (`1/3`, CI `[6.1%, 79.2%]`)** and doubled total wall-clock time (`+109.1%`, $d_z = +0.68$). Inspecting the `sympy-13480` trace reveals the exact mechanism: after editing `hyperbolic.py` at Step 2, the minimal-prompt agent attempted blocked sandbox imports (`import sys` at Step 3, `import os` at Step 4), **never discovered `run_tests()`**, and burned **6 extra turns** trying `pip install mpmath` and searching `/opt/miniconda3/envs/` via `run_command()`. On `sympy-14711`, unguided verbosity generated `3,072` output tokens in 2 steps, triggering Groq's TPM rate limit. **Action**: Keep `SWEBENCH_TASK_TEMPLATE` structured 4-phase prompt as mandatory default.
+**Finding & Root-Cause Trace Analysis**: Removing the 4-phase workflow caused solve rate to drop from **100% (`3/3`, CI `[43.8%, 100%]`) to 33.3% (`1/3`, CI `[6.1%, 79.2%]`)** and tripled total wall-clock time (`+203.7%`, $d_z = +0.63$). On `django-11066`, the minimal-prompt agent edited files but called `run_tests()` with its own commands (`python -m pytest`, `python -m django test ...`) instead of the official eval script, so they ran on the container's base Python rather than the `testbed` env and failed at `import django` from Step 5 to Step 21, spending 21 iterations and 110,441 input tokens (5.4× the structured baseline) until Groq's 7,000 input-tokens-per-minute limit and the 855s time budget stopped it without a patch. Inspecting the `sympy-13480` trace reveals the exact mechanism: after editing `hyperbolic.py` at Step 2, the minimal-prompt agent attempted blocked sandbox imports (`import sys` at Step 3, `import os` at Step 4), **never discovered `run_tests()`**, and burned **6 extra turns** trying `pip install mpmath` and searching `/opt/miniconda3/envs/` via `run_command()`. On `sympy-14711`, unguided verbosity generated `3,072` output tokens in 2 steps, triggering Groq's TPM rate limit. **Action**: Keep `SWEBENCH_TASK_TEMPLATE` structured 4-phase prompt as mandatory default.
 
 ---
 
