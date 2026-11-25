@@ -154,6 +154,7 @@ crash.log
 .eslintcache
 .parcel-cache/
 .mypy_cache/
+.ruff_cache/
 
 # =========================
 # Git
