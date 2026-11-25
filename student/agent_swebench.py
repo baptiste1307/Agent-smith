@@ -175,6 +175,21 @@ def main() -> None:
             "pruning older turns."
         ),
     )
+    parser.add_argument(
+        "--max-obs-chars",
+        type=int,
+        default=4000,
+        help=(
+            "Maximum characters kept per observation before head/tail "
+            "truncation."
+        ),
+    )
+    parser.add_argument(
+        "--prompt-mode",
+        choices=["structured", "minimal"],
+        default="structured",
+        help="Task prompt style (structured workflow vs minimal ablation).",
+    )
 
     args = parser.parse_args()
 
@@ -259,7 +274,9 @@ def main() -> None:
         )
 
         answer = agent_loop(
-            exercice=build_swebench_task_prompt(task),
+            exercice=build_swebench_task_prompt(
+                task, prompt_mode=args.prompt_mode
+            ),
             mcp_tools_wrappers=mcp_client.get_wrappers(),
             mcp_tools_schema=mcp_client.get_schemas(),
             model_name=args.model_name,
@@ -267,6 +284,7 @@ def main() -> None:
             max_iterations=30,
             tracker=tracker,
             keep_recent_turns=args.keep_recent_turns,
+            max_obs_chars=args.max_obs_chars,
         )
 
         patch = str(answer or "")

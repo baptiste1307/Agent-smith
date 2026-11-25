@@ -252,11 +252,31 @@ Work only from the repository and task context;
 do not fetch external issues, pull requests, or patches."""
 
 
-def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:
+SWEBENCH_MINIMAL_TASK_TEMPLATE = """Task: fix the following GitHub issue
+of the repository {repo}.
+
+The repository is in /testbed. Your changes to its files are the solution.
+
+<issue>
+{problem_statement}
+</issue>
+{hints}
+Fix the issue using the available tools and call final_answer(get_patch())
+once your fix is ready.
+Work only from the repository and task context;
+do not fetch external issues, pull requests, or patches."""
+
+
+def build_swebench_task_prompt(
+    task: SWEBenchTaskInput,
+    prompt_mode: str = "structured",
+) -> str:
     """Write the message that asks the LLM to solve one SWE-bench task.
 
     Args:
         task: The SWE-bench task given by the moulinette.
+        prompt_mode: Either "structured" (default 4-phase workflow) or
+            "minimal" (ablation without workflow instructions).
 
     Returns:
         The task message, sent to the LLM after the system prompt.
@@ -265,7 +285,12 @@ def build_swebench_task_prompt(task: SWEBenchTaskInput) -> str:
     if task.hints_text.strip():
         hints = f"\n<hints>\n{task.hints_text.strip()}\n</hints>\n"
 
-    return SWEBENCH_TASK_TEMPLATE.format(
+    template = (
+        SWEBENCH_MINIMAL_TASK_TEMPLATE
+        if prompt_mode == "minimal"
+        else SWEBENCH_TASK_TEMPLATE
+    )
+    return template.format(
         repo=task.repo or "under test",
         problem_statement=task.problem_statement.strip(),
         hints=hints,

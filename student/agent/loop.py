@@ -70,6 +70,7 @@ def agent_loop(
     tracker: MetricsTracker | None = None,
     api_key_env: str | None = None,
     keep_recent_turns: int = 3,
+    max_obs_chars: int = 4000,
 ):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
@@ -171,15 +172,17 @@ def agent_loop(
 
         # 5. show result to AI as text
         raw_output = result["output"] or ""
-        if len(raw_output) > 4000:
+        if len(raw_output) > max_obs_chars:
+            head_len = int(max_obs_chars * 0.375)
+            tail_len = max_obs_chars - head_len
             raw_output = (
-                raw_output[:1500]
+                raw_output[:head_len]
                 + (
-                    "\n... [output truncated: showing first 1500 and last "
-                    f"2500 of {len(result['output'])} characters to save "
-                    "tokens] ...\n"
+                    f"\n... [output truncated: showing first {head_len} "
+                    f"and last {tail_len} of {len(result['output'])} "
+                    "characters to save tokens] ...\n"
                 )
-                + raw_output[-2500:]
+                + raw_output[-tail_len:]
             )
         observation = (
             f"Observation:\nOutput:\n{raw_output}\nError: {result['error']}"

@@ -1,0 +1,13 @@
+{
+  "task_id": "django__django-11066",
+  "benchmark": "swebench",
+  "success": false,
+  "solution": "",
+  "error": "Agent timed out after 540s",
+  "total_iterations": 0,
+  "total_input_tokens": 0,
+  "total_output_tokens": 0,
+  "total_time_seconds": 540.155,
+  "system_prompt": "",
+  "steps": []
+}
