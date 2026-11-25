@@ -184,6 +184,109 @@ class TestSandboxSecurity(unittest.TestCase):
         self.assertIsNotNone(result["error"])
         self.assertIn("SandboxTimeoutError", result["error"])
 
+    def _loop_catching(self, handler):
+        return (
+            "n = 0\n"
+            "while True:\n"
+            "    try:\n"
+            "        while True:\n"
+            "            pass\n"
+            f"    {handler}\n"
+            "        n += 1\n"
+        )
+
+    def test_timeout_cannot_be_caught(self):
+        # Catching the timeout must not let the code keep running
+        for handler in ("except Exception:", "except:",
+                        "except (ValueError, Exception):"):
+            with self.subTest(handler=handler):
+                result = execute(self._loop_catching(handler), self.config)
+                self.assertIn("SandboxTimeoutError", result["error"] or "")
+
+    def test_timeout_finally_loop_interrupted(self):
+        code = (
+            "try:\n"
+            "    while True:\n"
+            "        pass\n"
+            "finally:\n"
+            "    while True:\n"
+            "        pass\n"
+        )
+        result = execute(code, self.config)
+        self.assertIn("SandboxTimeoutError", result["error"] or "")
+
+    def test_timeout_catch_routes_blocked(self):
+        # Every way to catch or swallow the timeout is refused up front
+        attempts = {
+            "base_exception": self._loop_catching("except BaseException:"),
+            "mro": "B = ValueError.mro()[-2]",
+            "exit_method": (
+                "class S:\n"
+                "    def __enter__(self):\n"
+                "        return self\n"
+                "    def __exit__(self, *exc):\n"
+                "        return True\n"
+            ),
+            "exit_in_type": "S = type('S', (), {'__exit__': len})",
+            "locals": "class S:\n    locals()['x'] = 1\n",
+        }
+        for name, code in attempts.items():
+            with self.subTest(name=name):
+                result = execute(code, self.config)
+                self.assertIsNotNone(result["error"])
+                self.assertNotIn("SandboxTimeoutError", result["error"])
+
+    def test_timeout_still_armed_after_tool_call(self):
+        # A tool call must not disarm the timeout (sub-second remainder)
+        result = execute(
+            "tool()\nwhile True:\n    pass",
+            self.config,
+            tools={"tool": lambda: None},
+        )
+        self.assertIn("SandboxTimeoutError", result["error"] or "")
+
+    def test_timeout_does_not_leak_after_execution(self):
+        execute("while True:\n    pass", self.config)
+        result = execute("print(sum(range(10)))", self.config)
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["output"].strip(), "45")
+
+    def test_match_keyword_pattern_escape_blocked(self):
+        code = (
+            "match final_answer:\n"
+            "    case object(__globals__=g):\n"
+            "        print(g['os'])\n"
+        )
+        result = execute(code, self.config)
+        self.assertIn("PermissionError", result["error"] or "")
+        self.assertNotIn("module 'os'", result["output"])
+
+    def test_match_positional_pattern_escape_blocked(self):
+        code = (
+            "M = type('M', (type,), {'__instancecheck__': "
+            "lambda cls, obj: True})\n"
+            "C = M('C', (), {'__match_args__': ('__globals__',)})\n"
+            "match final_answer:\n"
+            "    case C(g):\n"
+            "        print(g['os'])\n"
+        )
+        result = execute(code, self.config)
+        self.assertIn("PermissionError", result["error"] or "")
+        self.assertNotIn("module 'os'", result["output"])
+
+    def test_match_safe_patterns_allowed(self):
+        code = (
+            "match {'k': [1, 2]}:\n"
+            "    case {'k': [a, b]}:\n"
+            "        print(a + b)\n"
+            "match 3:\n"
+            "    case int() as n:\n"
+            "        print(n)\n"
+        )
+        result = execute(code, self.config)
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["output"].split(), ["3", "3"])
+
     def test_memory_limit_enforced(self):
         small_mem = SandboxConfig(
             authorized_imports=[],

@@ -34,6 +34,7 @@ FORBIDDEN_BUILTINS = (
     "breakpoint",
     "input",
     "globals",
+    "locals",
     "vars",
     "help",
     "exit",
@@ -49,6 +50,13 @@ FORBIDDEN_BUILTIN_DUNDERS = ("__loader__", "__spec__", "__package__")
 
 # Dunder names that sandboxed code may write as plain names
 ALLOWED_DUNDER_NAMES = frozenset({"__name__"})
+
+# Context-manager exit methods: an __exit__ returning True would swallow
+# the timeout. Sandboxed code may not define them.
+FORBIDDEN_METHOD_NAMES = frozenset({"__exit__", "__aexit__"})
+
+# Period at which the timeout is raised again if the code keeps running
+TIMEOUT_RETRY_SECONDS = 0.2
 
 
 class SecurityASTValidator(ast.NodeVisitor):
@@ -75,6 +83,48 @@ class SecurityASTValidator(ast.NodeVisitor):
             raise PermissionError(
                 f"Access to name '{node.id}' is forbidden by sandbox "
                 "security policy."
+            )
+        # The sandbox timeout is a BaseException: catching it is refused
+        if node.id == "BaseException":
+            raise PermissionError(
+                "Using 'BaseException' is forbidden by sandbox security "
+                "policy; catch Exception instead."
+            )
+        self.generic_visit(node)
+
+    def _check_function_name(self, name: str) -> None:
+        if name in FORBIDDEN_METHOD_NAMES:
+            raise PermissionError(
+                f"Defining '{name}' is forbidden by sandbox security policy."
+            )
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._check_function_name(node.name)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._check_function_name(node.name)
+        self.generic_visit(node)
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        # Catches type("C", (), {"__exit__": ...})
+        if isinstance(node.value, str):
+            self._check_function_name(node.value)
+
+    def visit_MatchClass(self, node: ast.MatchClass) -> None:
+        # `case X(attr=p)` reads obj.attr with the real getattr: without
+        # this check, `case object(__globals__=g)` escapes the sandbox
+        for attr in node.kwd_attrs:
+            check_attribute(attr)
+        # Positional sub-patterns read the attributes named in the class's
+        # __match_args__, which a class built with type() can set to any
+        # dunder. The class name is not trusted either (`int = Evil` would
+        # pass a name allowlist), so positional sub-patterns are refused.
+        if node.patterns:
+            raise PermissionError(
+                "Positional class patterns (case C(x)) are forbidden by "
+                "sandbox security policy; use keyword patterns such as "
+                "case C(attr=x), or case int() as x."
             )
         self.generic_visit(node)
 
@@ -250,6 +300,12 @@ def _auto_print_expressions(source: str) -> str:
     except SyntaxError:
         return source
 
+    # Bare `except:` would catch the sandbox timeout (a BaseException):
+    # it is executed as `except Exception:`
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and node.type is None:
+            node.type = ast.Name(id="Exception", ctx=ast.Load())
+
     new_body: list[ast.stmt] = []
     for stmt in tree.body:
         if isinstance(stmt, ast.Expr):
@@ -339,17 +395,28 @@ def execute(
     output = io.StringIO()
     answer = None
     error = None
+    # False as soon as exec() returns: a late timer tick is then ignored
+    running = True
 
     def on_timeout(signum: int, frame: Any) -> None:
-        """Interrupt the running code when the alarm fires.
+        """Interrupt the running code when the timer fires.
+
+        SandboxTimeoutError is a BaseException, so `except Exception`
+        does not catch it, and bare `except:` is rewritten before
+        execution. The timer is re-armed with a short period, so code
+        that still manages to keep running (a loop in a `finally` block,
+        nested handlers...) is interrupted again until it unwinds.
 
         Args:
             signum: The signal number (SIGALRM), required by signal.signal.
             frame: The current stack frame, required by signal.signal.
 
         Raises:
-            SandboxTimeoutError: Always.
+            SandboxTimeoutError: While the sandboxed code is running.
         """
+        if not running:
+            return
+        signal.setitimer(signal.ITIMER_REAL, TIMEOUT_RETRY_SECONDS)
         raise SandboxTimeoutError(
             f"Execution exceeded {config.max_execution_time_seconds} seconds."
         )
@@ -362,8 +429,9 @@ def execute(
         """Suspend sandbox-only limits during external MCP tool execution."""
 
         def _wrapped(*args: Any, **kwargs: Any) -> Any:
-            alarm = getattr(signal, "alarm")
-            remaining = alarm(0)
+            # setitimer keeps sub-second precision (alarm() rounds the
+            # remaining time, and 0 would disarm the timeout for good)
+            remaining = signal.setitimer(signal.ITIMER_REAL, 0)[0]
             network.unblock()
             if old_limit is not None:
                 try:
@@ -391,8 +459,7 @@ def execute(
                         pass
                 network.block()
                 if remaining > 0:
-                    alarm = getattr(signal, "alarm")
-                    alarm(remaining)
+                    signal.setitimer(signal.ITIMER_REAL, remaining)
 
         return _wrapped
 
@@ -458,8 +525,14 @@ def execute(
     executable_code = _auto_print_expressions(code)
 
     try:
-        with contextlib.redirect_stdout(output):
-            exec(executable_code, exec_namespace)
+        try:
+            with contextlib.redirect_stdout(output):
+                exec(executable_code, exec_namespace)
+        finally:
+            # Inside the outer try: a tick landing here is still caught
+            # by `except SandboxTimeoutError` below
+            running = False
+            alarm(0)
     except FinalAnswerException as e:
         answer = e.answer
     except MemoryError:

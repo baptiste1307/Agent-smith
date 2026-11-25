@@ -115,6 +115,8 @@ FORBIDDEN_PLAIN_ATTRS = frozenset(
         "ag_frame",
         "ag_code",
         "ag_await",
+        # cls.mro() reaches BaseException, which would catch the timeout
+        "mro",
         # typing.ForwardRef evaluates an arbitrary string with eval()
         "evaluate",
         "_evaluate",
@@ -425,10 +427,12 @@ class SandboxSecurityError(PermissionError):
     pass
 
 
-class SandboxTimeoutError(TimeoutError):
-    """Raised when sandboxed execution exceeds the configured time limit."""
+class SandboxTimeoutError(BaseException):
+    """Raised when sandboxed execution exceeds the configured time limit.
 
-    pass
+    A BaseException (like KeyboardInterrupt), so that the usual
+    `except Exception:` of sandboxed code cannot swallow it.
+    """
 
 
 class FinalAnswerException(Exception):
