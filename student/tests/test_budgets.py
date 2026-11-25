@@ -187,6 +187,58 @@ class TestClientDeadline(unittest.TestCase):
         self.assertLessEqual(timeouts[0], 4)
 
 
+class TestTokenAccounting(unittest.TestCase):
+    """Regression: answers without usage were recorded as 0 tokens."""
+
+    def setUp(self):
+        self.client = LLMClient(
+            "http://fake/v1", "fake", rotator=KeyRotator(keys=["k"])
+        )
+        self.messages = [{"role": "user", "content": "x" * 3000}]
+
+    def _generate(self, response):
+        with mock.patch.object(
+            self.client, "send_message", return_value=response
+        ):
+            return self.client.generate(self.messages)
+
+    def test_groq_tool_use_failed_is_counted(self):
+        failed = httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "tool_use_failed",
+                    "failed_generation": '{"name": "run_command"}',
+                }
+            },
+        )
+        answer = self._generate(failed)
+        self.assertIn("<tool_call>", answer.content)
+        self.assertTrue(answer.estimated_tokens)
+        self.assertGreaterEqual(answer.input_tokens, 1000)
+        self.assertGreater(answer.output_tokens, 0)
+
+    def test_missing_usage_is_estimated(self):
+        ok = httpx.Response(
+            200, json={"choices": [{"message": {"content": "hello"}}]}
+        )
+        answer = self._generate(ok)
+        self.assertTrue(answer.estimated_tokens)
+        self.assertGreaterEqual(answer.input_tokens, 1000)
+
+    def test_provider_usage_is_kept(self):
+        ok = httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "hello"}}],
+                "usage": {"prompt_tokens": 42, "completion_tokens": 7},
+            },
+        )
+        answer = self._generate(ok)
+        self.assertFalse(answer.estimated_tokens)
+        self.assertEqual((answer.input_tokens, answer.output_tokens), (42, 7))
+
+
 class TestMCPHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

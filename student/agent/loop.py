@@ -224,7 +224,7 @@ def agent_loop(
             max_tokens=max_tokens,
             deadline=tracker.deadline if tracker else None,
         )  # 1. AI gives its answer
-        if answer.input_tokens > 0:
+        if answer.input_tokens > 0 and not answer.estimated_tokens:
             chars_per_token = _message_chars(prompt_messages) / (
                 answer.input_tokens
             )

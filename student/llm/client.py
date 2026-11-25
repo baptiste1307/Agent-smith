@@ -20,9 +20,41 @@ class LLMResponse:
     retries: int
     model_name: str
     api_url: str  # url of api used
+    # True when the provider gave no usage and the counts are estimates
+    estimated_tokens: bool = False
 
 
 DEFAULT_MAX_TOKENS = 1536
+
+# Pessimistic characters-per-token ratio, used when the provider reports
+# no token usage: over-counting keeps the benchmark limits safe
+ESTIMATED_CHARS_PER_TOKEN = 3.0
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate (rounding up) the number of tokens of a text."""
+    return max(1, int(len(text) / ESTIMATED_CHARS_PER_TOKEN) + 1)
+
+
+def _usage_or_estimate(
+    usage: dict[str, Any],
+    messages: list[dict[str, str]],
+    content: str,
+) -> tuple[int, int, bool]:
+    """Return (input_tokens, output_tokens, estimated).
+
+    The provider's counts are used when present. Otherwise (no `usage`
+    block, or an error answer such as Groq's tool_use_failed, which still
+    consumed tokens) they are estimated from the request and the answer:
+    recording 0 would hide real consumption from the limits.
+    """
+    input_tokens = usage.get("prompt_tokens") or 0
+    output_tokens = usage.get("completion_tokens") or 0
+    if input_tokens > 0:
+        return input_tokens, output_tokens, False
+    prompt = "\n".join(m.get("content", "") for m in messages)
+    return estimate_tokens(prompt), estimate_tokens(content), True
+
 
 # HTTP statuses for which retrying the same request cannot succeed:
 # bad request, invalid key, forbidden, unknown model, request too large
@@ -220,15 +252,18 @@ class LLMClient:
                         else:
                             raw_content = ""
 
-                    usage = data.get("usage") or {}
+                    in_tok, out_tok, estimated = _usage_or_estimate(
+                        data.get("usage") or {}, messages, raw_content
+                    )
                     return LLMResponse(
                         content=raw_content,
-                        input_tokens=usage.get("prompt_tokens", 0),
-                        output_tokens=usage.get("completion_tokens", 0),
+                        input_tokens=in_tok,
+                        output_tokens=out_tok,
                         request_time_ms=elapsed_ms,
                         retries=attempt,
                         model_name=self.model_name,
                         api_url=self.provider_url,
+                        estimated_tokens=estimated,
                     )
 
                 last_error = (
@@ -248,17 +283,23 @@ class LLMClient:
                             err_obj.get("code") == "tool_use_failed"
                             and failed_gen
                         ):
+                            content = (
+                                f"<tool_call>\n{failed_gen}\n</tool_call>"
+                            )
+                            # The error carries no usage, but the
+                            # generation consumed tokens: estimate them
+                            in_tok, out_tok, estimated = _usage_or_estimate(
+                                {}, messages, failed_gen
+                            )
                             return LLMResponse(
-                                content=(
-                                    f"<tool_call>\n{failed_gen}\n"
-                                    "</tool_call>"
-                                ),
-                                input_tokens=0,
-                                output_tokens=0,
+                                content=content,
+                                input_tokens=in_tok,
+                                output_tokens=out_tok,
                                 request_time_ms=elapsed_ms,
                                 retries=attempt,
                                 model_name=self.model_name,
                                 api_url=self.provider_url,
+                                estimated_tokens=estimated,
                             )
                     except Exception:
                         pass
