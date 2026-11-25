@@ -431,12 +431,13 @@ class SandboxTimeoutError(TimeoutError):
     pass
 
 
-class FinalAnswerException(BaseException):
+class FinalAnswerException(Exception):
     """Signals that final_answer(answer) was called by the agent.
 
-    Inherits from BaseException (like KeyboardInterrupt and SystemExit) rather
-    than Exception so that 'except Exception:' blocks in LLM-generated code
-    cannot accidentally catch or swallow this termination signal.
+    It stops the executed code at the final_answer() call. The answer is
+    recorded by the sandbox *before* this exception is raised, so code
+    that catches it (`try: ... except Exception:`) cannot lose the answer:
+    it only keeps running after the call.
     """
 
     def __init__(self, answer: str) -> None:

@@ -180,17 +180,52 @@ def iter_codebase_files(
     return sorted(matched)
 
 
+def normalize_file_pattern(
+    file_pattern: str | None, testbed: Path
+) -> str | None:
+    """Turn the many ways an LLM names files into a testbed-relative glob.
+
+    Accepted forms: a glob ('*.py', 'pkg/*.py'), a path inside the
+    container ('/testbed/pkg/mod.py'), an absolute host path under
+    TESTBED_PATH, a relative path ('./pkg/mod.py'), or a directory
+    ('pkg/sub', '/testbed/pkg/sub/') which means every file under it.
+    """
+    if not file_pattern or not file_pattern.strip():
+        return None
+    pat = file_pattern.strip()
+
+    if pat.rstrip("/") == "/testbed":
+        return None
+    if pat.startswith("/testbed/"):
+        pat = pat[len("/testbed/"):]
+    elif os.path.isabs(pat):
+        try:
+            pat = str(Path(pat).resolve().relative_to(testbed))
+        except ValueError:
+            return pat  # outside the repository: matches nothing
+    while pat.startswith("./"):
+        pat = pat[2:]
+
+    has_glob = any(ch in pat for ch in "*?[")
+    if pat and not has_glob and (testbed / pat).is_dir():
+        pat = pat.rstrip("/") + "/*"  # fnmatch's * also crosses '/'
+    return pat or None
+
+
 def search_code(pattern: str, file_pattern: str | None = None) -> str:
     """Perform a grep-like search in the codebase.
 
     Args:
         pattern: Regex pattern or literal string to search for.
-        file_pattern: Optional file glob pattern to filter searched files
-            (e.g. '*.py').
+        file_pattern: Optional filter on the searched files: a glob
+            ('*.py', 'pkg/*.py'), a file path ('/testbed/pkg/mod.py',
+            'pkg/mod.py') or a directory ('pkg/sub').
 
     Returns:
         Formatted string of matching lines:
         /absolute/path_to_file.py:<line_number> <line_content>
+        When nothing matches, an explicit message says whether no file
+        matched file_pattern or no line matched pattern.
     """
     if not pattern:
         return ""
@@ -201,7 +236,14 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
     except re.error:
         regex = re.compile(re.escape(pattern))
 
-    files = iter_codebase_files(testbed, file_pattern)
+    glob = normalize_file_pattern(file_pattern, testbed)
+    files = iter_codebase_files(testbed, glob)
+    if not files:
+        return (
+            f"No file matches file_pattern {file_pattern!r}. Use a glob "
+            "such as '*.py', or a path inside the repository such as "
+            "'/testbed/pkg/module.py' or 'pkg/subdir'."
+        )
     results: list[str] = []
     total_found = 0
 
@@ -217,6 +259,15 @@ def search_code(pattern: str, file_pattern: str | None = None) -> str:
                             results.append(f"{abs_path}:{lineno} {content}")
         except (OSError, PermissionError):
             continue
+
+    if total_found == 0:
+        scope = (
+            f"the {len(files)} file(s) matching file_pattern "
+            f"{file_pattern!r}"
+            if glob
+            else f"the {len(files)} file(s) of the repository"
+        )
+        return f"No match for pattern {pattern!r} in {scope}."
 
     if total_found > MAX_SEARCH_RESULTS:
         results.append(

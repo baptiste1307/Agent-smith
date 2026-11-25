@@ -7,14 +7,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "student"))
 from tools.mbpp_tools import run_tests_mbpp  # noqa: E402
 
 try:
-    from mcp.server.mcpserver import MCPServer
+    from mcp.server.fastmcp import FastMCP
 except ImportError:
     sys.exit(
-        f"Cannot import mcp v2 (MCPServer) with {sys.executable}. "
+        f"Cannot import mcp (FastMCP) with {sys.executable}. "
         "Try: cd student && uv run python ../mcp_tools_mbpp.py"
     )
 
-mcp = MCPServer("agent-smith-mbpp")
+mcp = FastMCP("agent-smith-mbpp", log_level="WARNING")
 
 
 @mcp.tool()
@@ -61,6 +61,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     if args.http:
-        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.run(transport="streamable-http")
     else:
         mcp.run(transport="stdio")

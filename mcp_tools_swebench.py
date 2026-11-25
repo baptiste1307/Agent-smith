@@ -20,15 +20,15 @@ from tools.search_tools import (  # noqa: E402
 )
 
 try:
-    from mcp.server.mcpserver import MCPServer
+    from mcp.server.fastmcp import FastMCP
 except ImportError:
     sys.exit(
-        f"Cannot import mcp v2 (MCPServer) with {sys.executable}. "
+        f"Cannot import mcp (FastMCP) with {sys.executable}. "
         "Try: cd student && uv run python ../mcp_tools_swebench.py"
     )
 
 
-mcp = MCPServer("agent-smith-swebench")
+mcp = FastMCP("agent-smith-swebench", log_level="WARNING")
 
 
 @mcp.tool()
@@ -59,6 +59,8 @@ def list_files(directory: str = ".", pattern: str = "*") -> str:
 def search_code(pattern: str, file_pattern: str = "*") -> str:
     """
     Search the codebase for a regex or literal pattern.
+    file_pattern restricts the searched files: a glob ('*.py'),
+    a file ('/testbed/pkg/mod.py') or a directory ('/testbed/pkg').
     """
     return _search_code(pattern, file_pattern)
 
@@ -161,6 +163,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.http:
-        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.run(transport="streamable-http")
     else:
         mcp.run(transport="stdio")

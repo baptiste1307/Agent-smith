@@ -4,10 +4,31 @@ import shlex
 import sys
 import threading
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
-from mcp import Client, StdioServerParameters
+from mcp import ClientSession, StdioServerParameters
+from pydantic import AnyUrl
+from mcp.client.stdio import stdio_client
+
+try:  # mcp >= 1.24
+    from mcp.client.streamable_http import (
+        streamable_http_client as _http_client,
+    )
+except ImportError:  # older mcp 1.x releases
+    from mcp.client.streamable_http import (  # type: ignore[assignment]
+        streamablehttp_client as _http_client,
+    )
+
+
+def _field(obj: Any, *names: str, default: Any = None) -> Any:
+    """Read the first existing attribute among names (camelCase in mcp 1.x,
+    snake_case in later releases), so the client works with both."""
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return default
 
 
 class MCPClient:
@@ -88,7 +109,19 @@ class MCPClient:
         what closes the connection.
         """
         self._stop = asyncio.Event()
-        async with Client(self._server) as client:
+        async with AsyncExitStack() as stack:
+            if isinstance(self._server, str):  # streamable HTTP transport
+                streams = await stack.enter_async_context(
+                    _http_client(self._server)
+                )
+            else:  # stdio transport: the server is a child process
+                streams = await stack.enter_async_context(
+                    stdio_client(self._server)
+                )
+            client = await stack.enter_async_context(
+                ClientSession(streams[0], streams[1])
+            )
+            await client.initialize()
             self._client = client
             self._tools = (await client.list_tools()).tools
             try:
@@ -135,7 +168,7 @@ class MCPClient:
             getattr(content, "text", str(content))
             for content in result.content
         )
-        if result.is_error:
+        if _field(result, "isError", "is_error", default=False):
             raise RuntimeError(f"Tool '{name}' failed: {text}")
         return text
 
@@ -150,7 +183,9 @@ class MCPClient:
             {
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": tool.input_schema,
+                "inputSchema": _field(
+                    tool, "inputSchema", "input_schema", default={}
+                ),
             }
             for tool in self._tools
         ]
@@ -211,7 +246,7 @@ class MCPClient:
     def read_resource(self, uri: str) -> str:
         """Read a resource by URI from the connected MCP server."""
         future = asyncio.run_coroutine_threadsafe(
-            self._client.read_resource(uri), self._loop
+            self._client.read_resource(AnyUrl(uri)), self._loop
         )
         result = future.result()
         return "\n".join(getattr(c, "text", str(c)) for c in result.contents)
@@ -249,7 +284,8 @@ class MCPClient:
         wrappers = {}
         for tool in self._tools:
             # The schema keeps the parameters in the order of the signature
-            param_names = list(tool.input_schema.get("properties", {}))
+            schema = _field(tool, "inputSchema", "input_schema", default={})
+            param_names = list((schema or {}).get("properties", {}))
             wrappers[tool.name] = self._make_wrapper(tool.name, param_names)
 
         return wrappers

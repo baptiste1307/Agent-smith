@@ -5,6 +5,10 @@ Implements the Docker execution environment required by Section V.4:
 - Safely executing commands and evaluation scripts inside the container
 - File synchronization between host and container
 - Guaranteed container cleanup via atexit and signal handlers (SIGTERM, SIGINT)
+- Cleanup even after SIGKILL (kill -9), which no handler can catch:
+  a detached watchdog process removes the container as soon as the agent
+  process disappears, and the container itself has a bounded lifetime
+  (`--rm` + `sleep`) as a last resort.
 """
 
 import atexit
@@ -18,11 +22,77 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Last-resort lifetime of a container: above the 900 s SWE-bench timeout,
+# so it never stops during a run, but an orphan cannot live forever
+DEFAULT_MAX_LIFETIME_SECONDS = 1800
+
+# Runs in a separate, detached Python process. It polls the agent PID and
+# removes the container (by name) once the agent is gone (exited, crashed or
+# killed with SIGKILL). A zombie (dead but not yet reaped) counts as gone.
+# It is started *before* `docker run`: if the agent dies while the daemon is
+# still creating the container, the removal is retried until it is gone.
+# When the agent was started by `uv run` (ppid != 0) and uv itself is
+# SIGKILLed, the agent would keep running orphaned: the watchdog then sends
+# it SIGTERM (its handler cleans up) before removing the container.
+_WATCHDOG_SCRIPT = """
+import os, signal, subprocess, sys, time
+
+pid, name, ppid = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
+
+
+while alive(pid) and (ppid == 0 or alive(ppid)):
+    time.sleep(1)
+if alive(pid):  # the uv parent died: stop the orphaned agent
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    time.sleep(5)
+
+
+def exists(name):
+    res = subprocess.run(
+        ["docker", "container", "inspect", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+    )
+    return res.returncode == 0
+
+
+# Absent on two checks in a row: a creation still in progress is caught
+absent_in_a_row = 0
+deadline = time.time() + 60
+while absent_in_a_row < 2 and time.time() < deadline:
+    subprocess.run(
+        ["docker", "rm", "-f", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=60,
+    )
+    absent_in_a_row = 0 if exists(name) else absent_in_a_row + 1
+    time.sleep(2)
+"""
+
 
 class DockerContainer:
     """Manages the lifecycle of a Docker container for a SWE-bench task."""
 
-    _active_containers: set[str] = set()
+    _active_containers: set[str] = set()  # container names
     _cleanup_registered: bool = False
 
     def __init__(
@@ -30,6 +100,7 @@ class DockerContainer:
         image_name: str,
         container_name: str | None = None,
         auto_cleanup: bool = True,
+        max_lifetime_seconds: int = DEFAULT_MAX_LIFETIME_SECONDS,
     ) -> None:
         """Initialize the Docker container manager.
 
@@ -37,8 +108,10 @@ class DockerContainer:
             image_name: Docker image name on DockerHub
                 (e.g. swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest).
             container_name: Optional explicit name for the container.
-            auto_cleanup: If True, registers process exit hooks to delete
-                the container.
+            auto_cleanup: If True, registers process exit hooks and a
+                SIGKILL-proof watchdog to delete the container.
+            max_lifetime_seconds: The container stops and removes itself
+                after this delay, even if every other cleanup failed.
         """
         self.image_name = image_name
         safe_name = re.sub(
@@ -49,7 +122,9 @@ class DockerContainer:
         self.container_name = safe_name
         self.container_id: str | None = None
         self.auto_cleanup = auto_cleanup
+        self.max_lifetime_seconds = max_lifetime_seconds
         self._is_cleaned_up = False
+        self._run_attempted = False  # set just before `docker run`
 
         if auto_cleanup:
             self._register_global_cleanup()
@@ -61,10 +136,10 @@ class DockerContainer:
             return
 
         def _cleanup_all() -> None:
-            for cid in list(cls._active_containers):
+            for name in list(cls._active_containers):
                 try:
                     subprocess.run(
-                        ["docker", "rm", "-f", cid],
+                        ["docker", "rm", "-f", name],
                         check=False,
                         capture_output=True,
                         timeout=15,
@@ -160,6 +235,7 @@ class DockerContainer:
             "docker",
             "run",
             "-d",
+            "--rm",  # removed automatically once its main process stops
         ]
         if "x86_64" in self.image_name or sys.platform == "darwin":
             cmd.extend(["--platform", "linux/amd64"])
@@ -168,11 +244,19 @@ class DockerContainer:
                 "--name",
                 self.container_name,
                 self.image_name,
-                "tail",
-                "-f",
-                "/dev/null",
+                # Bounded idle command instead of `tail -f /dev/null`
+                "sleep",
+                str(int(self.max_lifetime_seconds)),
             ]
         )
+
+        # Register the cleanup by name *before* `docker run`: if the agent
+        # is killed while the CLI waits, the daemon still creates the
+        # container, but we would never learn its ID
+        self._run_attempted = True
+        self.__class__._active_containers.add(self.container_name)
+        if self.auto_cleanup:
+            self._spawn_watchdog(self.container_name)
 
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
@@ -183,8 +267,47 @@ class DockerContainer:
 
         cid = res.stdout.strip()
         self.container_id = cid
-        self.__class__._active_containers.add(cid)
         return cid
+
+    @staticmethod
+    def _spawn_watchdog(name: str) -> None:
+        """Start a detached process that removes the container on SIGKILL.
+
+        A SIGKILL'd process runs no handler (no atexit, no finally), so the
+        cleanup must live in another process. start_new_session=True puts
+        it outside the agent's process group: a group kill (Ctrl+C, the
+        moulinette timeout) does not reach it, and it outlives the agent.
+
+        The parent is watched too only when it is `uv`: `uv run` always
+        waits for its child, so its death means the agent was orphaned. Any
+        other parent (a shell, a script) is ignored, so a normally running
+        agent is never stopped by mistake.
+        """
+        ppid = os.getppid()
+        try:
+            with open(f"/proc/{ppid}/comm", encoding="utf-8") as f:
+                watch_ppid = ppid if f.read().strip() == "uv" else 0
+        except OSError:
+            watch_ppid = 0
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _WATCHDOG_SCRIPT,
+                    str(os.getpid()),
+                    name,
+                    str(watch_ppid),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+        except OSError:
+            # The signal handlers and the bounded lifetime still apply
+            pass
 
     def exec_run(
         self,
@@ -252,7 +375,8 @@ class DockerContainer:
 
         dest = str(Path(host_path).resolve())
         cmd = ["docker", "cp", f"{self.container_id}:{container_path}", dest]
-        res = subprocess.run(cmd, capture_output=True, timeout=60)
+        # A whole repository (/testbed with its .git) can be large
+        res = subprocess.run(cmd, capture_output=True, timeout=600)
         return res.returncode == 0
 
     def copy_to_container(
@@ -349,14 +473,18 @@ class DockerContainer:
                 os.remove(temp_script)
 
     def stop(self) -> None:
-        """Stop and remove the container."""
-        if self._is_cleaned_up or not self.container_id:
+        """Stop and remove the container.
+
+        Removes by name, so it also works when `docker run` was interrupted
+        before returning the container ID.
+        """
+        if self._is_cleaned_up or not self._run_attempted:
             return
 
-        cid = self.container_id
+        name = self.container_name
         try:
             subprocess.run(
-                ["docker", "rm", "-f", cid],
+                ["docker", "rm", "-f", name],
                 check=False,
                 capture_output=True,
                 timeout=15,
@@ -364,7 +492,7 @@ class DockerContainer:
         except Exception:
             pass
         finally:
-            self.__class__._active_containers.discard(cid)
+            self.__class__._active_containers.discard(name)
             self._is_cleaned_up = True
             self.container_id = None
 
