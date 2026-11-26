@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "student"))
 from tools.mbpp_tools import run_tests_mbpp  # noqa: E402
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
 except ImportError:
     sys.exit(
         f"Cannot import mcp (FastMCP) with {sys.executable}. "

@@ -10,17 +10,20 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
-from mcp import ClientSession, StdioServerParameters
+from mcp import (  # type: ignore[import-not-found]
+    ClientSession,
+    StdioServerParameters,
+)
 from pydantic import AnyUrl
-from mcp.client.stdio import stdio_client
+from mcp.client.stdio import stdio_client  # type: ignore[import-not-found]
 
 try:  # mcp >= 1.24
     from mcp.client.streamable_http import (
         streamable_http_client as _http_client,
-    )
+    )  # type: ignore[import-not-found]
 except ImportError:  # older mcp 1.x releases
-    from mcp.client.streamable_http import (  # type: ignore[assignment]
-        streamablehttp_client as _http_client,
+    from mcp.client.streamable_http import (  # type: ignore[import-not-found]
+        streamablehttp_client as _http_client,  # type: ignore[assignment]
     )
 
 

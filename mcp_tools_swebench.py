@@ -20,7 +20,7 @@ from tools.search_tools import (  # noqa: E402
 )
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP  # type: ignore[import-not-found]
 except ImportError:
     sys.exit(
         f"Cannot import mcp (FastMCP) with {sys.executable}. "

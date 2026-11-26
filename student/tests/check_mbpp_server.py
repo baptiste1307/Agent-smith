@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from mcp import Client, StdioServerParameters
+from mcp import Client, StdioServerParameters  # type: ignore[import-not-found]
 
 SERVER = Path(__file__).resolve().parents[2] / "mcp_tools_mbpp.py"
 TESTS = ["assert add(1, 2) == 3"]
