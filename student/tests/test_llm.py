@@ -5,7 +5,7 @@ import unittest
 
 from dotenv import load_dotenv
 from llm.client import LLMClient
-from llm.rotator import KeyRotator
+from llm.rotator import KeyRotator, usable_keys
 
 load_dotenv()
 
@@ -46,9 +46,9 @@ class TestKeyRotator(unittest.TestCase):
 
 class TestLLMConnection(unittest.TestCase):
     @unittest.skipUnless(
-        os.getenv("MISTRAL_API_KEY")
-        or os.getenv("GROQ_API_KEY")
-        or os.getenv("OPENROUTER_API_KEY"),
+        usable_keys(os.getenv("MISTRAL_API_KEY"))
+        or usable_keys(os.getenv("GROQ_API_KEY"))
+        or usable_keys(os.getenv("OPENROUTER_API_KEY")),
         (
             "Requires MISTRAL_API_KEY, GROQ_API_KEY, "
             "or OPENROUTER_API_KEY env var"
@@ -56,7 +56,7 @@ class TestLLMConnection(unittest.TestCase):
     )
     def test_live_llm_call(self):
         candidates = []
-        if os.getenv("MISTRAL_API_KEY"):
+        if usable_keys(os.getenv("MISTRAL_API_KEY")):
             candidates.append(
                 (
                     "https://api.mistral.ai/v1",
@@ -64,7 +64,7 @@ class TestLLMConnection(unittest.TestCase):
                     "MISTRAL_API_KEY",
                 )
             )
-        if os.getenv("GROQ_API_KEY"):
+        if usable_keys(os.getenv("GROQ_API_KEY")):
             candidates.append(
                 (
                     "https://api.groq.com/openai/v1",
@@ -72,7 +72,7 @@ class TestLLMConnection(unittest.TestCase):
                     "GROQ_API_KEY",
                 )
             )
-        if os.getenv("OPENROUTER_API_KEY"):
+        if usable_keys(os.getenv("OPENROUTER_API_KEY")):
             candidates.append(
                 (
                     "https://openrouter.ai/api/v1",

@@ -67,6 +67,18 @@ NON_RETRYABLE_STATUSES = (400, 401, 403, 404, 413, 422)
 PROVIDER_UNUSABLE_STATUSES = (401, 403, 404)
 
 
+# Markers of a daily quota in a 429 body (Gemini free tier "requests per
+# day", OpenRouter "free-models-per-day"): it only resets the next day,
+# so retrying with a backoff of a few seconds can never succeed.
+DAILY_QUOTA_MARKERS = ("per day", "perday", "per_day", "per-day")
+
+
+def is_daily_quota_error(body: str) -> bool:
+    """Return True when a rate-limit answer is about a per-day quota."""
+    text = body.lower()
+    return any(marker in text for marker in DAILY_QUOTA_MARKERS)
+
+
 class ProviderUnavailableError(RuntimeError):
     """The provider cannot serve this run (bad key, unknown model, or still
     rate limited after every retry). The agent loop can then switch to a
@@ -223,6 +235,8 @@ class LLMClient:
                 failed, or if the deadline leaves no time for a request.
         """
         last_error = "no attempt made"  # kept to explain the final failure
+        # Keys that answered HTTP 402 or a daily-quota 429 during this call
+        exhausted_keys = 0
 
         for attempt in range(self.max_retries + 1):
             http_timeout = self._time_budget(deadline, last_error)
@@ -324,8 +338,33 @@ class LLMClient:
                 if response.status_code in NON_RETRYABLE_STATUSES:
                     raise RuntimeError(f"LLM request rejected: {last_error}")
 
-                # Case quota / rate limit (429, 402): rotate key and retry
-                if response.status_code in (429, 402):
+                # Payment required (402, e.g. Mistral "You need a
+                # subscription") or daily quota used up (429 "per day"):
+                # waiting a few seconds never helps. Try the next key; when
+                # every key failed, give up at once so the agent can switch
+                # to the next provider.
+                if response.status_code == 402 or (
+                    response.status_code == 429
+                    and is_daily_quota_error(response.text)
+                ):
+                    exhausted_keys += 1
+                    num_keys = (
+                        len(self.rotator.keys) if self.rotator.keys else 1
+                    )
+                    if exhausted_keys >= num_keys:
+                        raise ProviderUnavailableError(
+                            f"LLM request rejected: {last_error}"
+                        )
+                    self.rotator.rotate_key()
+                    print(
+                        f"[LLM] HTTP {response.status_code} (billing or "
+                        "daily quota). Rotated to next key "
+                        f"({self.rotator.current_index + 1}/{num_keys})..."
+                    )
+                    continue
+
+                # Case rate limit (429): rotate key and retry
+                if response.status_code == 429:
                     num_keys = (
                         len(self.rotator.keys) if self.rotator.keys else 1
                     )

@@ -1,9 +1,11 @@
 """Choose which (provider_url, model_name) pairs an agent tries, in order.
 
 The defaults live in models_config.json (`default_benchmarks`): one
-primary model and one fallback per benchmark. Command line arguments
-override the primary; the fallback is kept so that an invalid key or an
-unavailable provider does not fail the whole task.
+primary model and an ordered list of `fallbacks` per benchmark. Command
+line arguments override the primary; the fallbacks are kept so that an
+invalid key or an unavailable provider does not fail the whole task.
+Providers whose key is missing or left at its example value are skipped
+later, when the clients are built.
 """
 
 import json
@@ -28,7 +30,7 @@ def model_chain(
 
     Returns:
         The primary pair first (command line values win over the config),
-        then the configured fallback, without duplicates.
+        then the configured fallbacks in order, without duplicates.
     """
     config = json.loads(config_path.read_text(encoding="utf-8"))
     defaults = config["default_benchmarks"][benchmark]
@@ -39,10 +41,18 @@ def model_chain(
     )
     chain = [primary]
 
-    fallback_url = defaults.get("fallback_provider_url")
-    fallback_model = defaults.get("fallback_model_name")
-    if fallback_url and fallback_model:
-        fallback = (fallback_url, fallback_model)
-        if fallback not in chain:
-            chain.append(fallback)
+    extra = list(defaults.get("fallbacks", []))
+    # Older single-fallback form, still accepted
+    if defaults.get("fallback_provider_url"):
+        extra.insert(
+            0,
+            {
+                "provider_url": defaults["fallback_provider_url"],
+                "model_name": defaults["fallback_model_name"],
+            },
+        )
+    for entry in extra:
+        pair = (entry["provider_url"], entry["model_name"])
+        if pair not in chain:
+            chain.append(pair)
     return chain

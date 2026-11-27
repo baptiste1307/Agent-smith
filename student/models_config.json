@@ -1,12 +1,31 @@
 {
   "default_benchmarks": {
     "mbpp": {
-      "provider": "groq",
-      "provider_url": "https://api.groq.com/openai/v1",
-      "model_name": "qwen/qwen3.8-27b",
-      "fallback_provider": "mistral",
-      "fallback_provider_url": "https://api.mistral.ai/v1",
-      "fallback_model_name": "codestral-latest",
+      "provider": "gemini",
+      "provider_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model_name": "gemini-3.5-flash",
+      "fallbacks": [
+        {
+          "provider": "gemini",
+          "provider_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "model_name": "gemini-flash-lite-latest"
+        },
+        {
+          "provider": "openrouter",
+          "provider_url": "https://openrouter.ai/api/v1",
+          "model_name": "nvidia/nemotron-3-ultra-550b-a55b:free"
+        },
+        {
+          "provider": "groq",
+          "provider_url": "https://api.groq.com/openai/v1",
+          "model_name": "qwen/qwen3.8-27b"
+        },
+        {
+          "provider": "mistral",
+          "provider_url": "https://api.mistral.ai/v1",
+          "model_name": "codestral-latest"
+        }
+      ],
       "limits": {
         "max_iterations": 10,
         "max_input_tokens": 6000,
@@ -15,13 +34,32 @@
       }
     },
     "swebench": {
-      "provider": "groq",
-      "provider_url": "https://api.groq.com/openai/v1",
-      "model_name": "qwen/qwen3.8-27b",
+      "provider": "gemini",
+      "provider_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model_name": "gemini-3.5-flash",
       "keep_recent_turns": 10,
-      "fallback_provider": "mistral",
-      "fallback_provider_url": "https://api.mistral.ai/v1",
-      "fallback_model_name": "codestral-latest",
+      "fallbacks": [
+        {
+          "provider": "gemini",
+          "provider_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "model_name": "gemini-flash-lite-latest"
+        },
+        {
+          "provider": "openrouter",
+          "provider_url": "https://openrouter.ai/api/v1",
+          "model_name": "nvidia/nemotron-3-ultra-550b-a55b:free"
+        },
+        {
+          "provider": "groq",
+          "provider_url": "https://api.groq.com/openai/v1",
+          "model_name": "qwen/qwen3.8-27b"
+        },
+        {
+          "provider": "mistral",
+          "provider_url": "https://api.mistral.ai/v1",
+          "model_name": "codestral-latest"
+        }
+      ],
       "limits": {
         "max_iterations": 30,
         "max_input_tokens": 300000,
@@ -62,7 +100,15 @@
         "google/gemma-4-31b-it:free",
         "google/gemma-4-26b-a4b-it:free"
       ]
+    },
+    "gemini": {
+      "provider_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_env": "GEMINI_API_KEY",
+      "tier": "free",
+      "models": [
+        "gemini-3.5-flash",
+        "gemini-flash-lite-latest"
+      ]
     }
   }
 }
-

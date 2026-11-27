@@ -33,6 +33,29 @@ def _looks_like_git_patch(text: str) -> bool:
     return bool(text.strip()) and all(marker in text for marker in markers)
 
 
+def _salvage_patch(mcp_client: MCPClient | None) -> str:
+    """Return the repository diff when the agent stopped without calling
+    final_answer (iteration limit, budget, provider failure).
+
+    The edits made so far are still in the testbed: submitting them gives
+    the task a chance instead of an empty solution. Returns "" when there
+    is no usable patch.
+    """
+    if mcp_client is None:
+        return ""
+    try:
+        patch = str(mcp_client.get_wrappers()["get_patch"]() or "")
+    except Exception:
+        return ""
+    if not _looks_like_git_patch(patch):
+        return ""
+    print(
+        "[SWE-bench] Stopped without final_answer: submitting the current "
+        "repository diff."
+    )
+    return patch
+
+
 def _exit_on_sigterm(signum: int, frame: object) -> None:
     """Turn SIGTERM (sent by the moulinette on timeout) into SystemExit.
 
@@ -198,7 +221,9 @@ def main() -> None:
         )
 
         patch = str(answer or "")
-        if _looks_like_git_patch(patch):
+        if not _looks_like_git_patch(patch):
+            patch = _salvage_patch(mcp_client)
+        if patch:
             tracker.save_solution(
                 filepath=args.output,
                 success=True,
@@ -217,11 +242,16 @@ def main() -> None:
             )
 
     except Exception as e:
+        patch = _salvage_patch(mcp_client)
         tracker.save_solution(
             filepath=args.output,
-            success=False,
-            solution="",
-            error=str(e),
+            success=bool(patch),
+            solution=patch,
+            error=(
+                f"{e} (the current repository diff was submitted)"
+                if patch
+                else str(e)
+            ),
         )
     except SystemExit:
         tracker.save_solution(

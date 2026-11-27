@@ -2,6 +2,29 @@ import os
 from dataclasses import dataclass
 
 
+def is_placeholder_key(key: str) -> bool:
+    """Return True for an empty key or an example value from .env.example
+    (your_..._here, gsk_xxxx...). Leaving the example value in .env means
+    "I don't use this provider", so such keys are treated as missing.
+    """
+    k = key.strip().lower()
+    return (
+        not k
+        or k.startswith("your")
+        or k.endswith("_here")
+        or "xxxx" in k
+    )
+
+
+def usable_keys(value: str | None) -> list[str]:
+    """Split a comma-separated env value into real (non-example) keys."""
+    if not value:
+        return []
+    return [
+        k.strip() for k in value.split(",") if not is_placeholder_key(k)
+    ]
+
+
 @dataclass
 class KeyRotator:
     keys: list[str] | None = None
@@ -35,11 +58,12 @@ class KeyRotator:
                 f"Environment variable '{env_var}' doesn't exist."
             )
 
-        splitted_api_keys = [
-            k.strip() for k in env_var_content.split(",") if k.strip()
-        ]
+        splitted_api_keys = usable_keys(env_var_content)
         if not splitted_api_keys:
-            raise ValueError(f"Environment variable '{env_var}' is empty.")
+            raise ValueError(
+                f"Environment variable '{env_var}' is empty or only holds "
+                "example values (provider disabled)."
+            )
 
         return cls(keys=splitted_api_keys)
 
@@ -77,8 +101,7 @@ class KeyRotator:
         # provider's key (which would cause confusing auth errors).
         if provider_candidates:
             for var in provider_candidates:
-                val = os.getenv(var)
-                if val and val.strip():
+                if usable_keys(os.getenv(var)):
                     return cls.from_env(var)
             # Explicit provider but no matching key — fail with a clear message
             raise ValueError(
@@ -97,8 +120,7 @@ class KeyRotator:
             "API_KEY",
         ]
         for var in generic_candidates:
-            val = os.getenv(var)
-            if val and val.strip():
+            if usable_keys(os.getenv(var)):
                 return cls.from_env(var)
 
         raise ValueError(
