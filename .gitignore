@@ -162,3 +162,5 @@ crash.log
 # Git
 # =========================
 *.orig
+# Correction scale (contains evaluator info)
+correction.subject.pdf
