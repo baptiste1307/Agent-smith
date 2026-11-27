@@ -336,7 +336,7 @@ Evaluated on `sympy__sympy-14711`, `sympy__sympy-13480`, and `pydata__xarray-462
 
 **Key findings**:
 - **Non-reasoning code/instruct models win under hard token caps**: `codestral-latest` (3/3) and `qwen/qwen3.8-27b` (2/3 SWE-bench, 5/5 MBPP) stayed well below limits, whereas reasoning tokens caused `openai/gpt-oss-120b` to exceed the 10,000 output-token cap (`11,223`).
-- **Over-aggressive pruning backfires**: Pruning after 3 turns caused file re-reads on multi-step bugs; widening `keep_recent_turns` cut both iterations (-29%) and total input tokens (-39%). Accordingly, `agent_swebench.py` defaults to `keep_recent_turns=10` and `codestral-latest`.
+- **Over-aggressive pruning backfires**: Pruning after 3 turns caused file re-reads on multi-step bugs; widening `keep_recent_turns` cut both iterations (-29%) and total input tokens (-39%). Accordingly, `agent_swebench.py` defaults to `keep_recent_turns=10`. The default models come from `student/models_config.json` (`default_benchmarks`): a primary model plus a fallback that the agent switches to when the primary provider is unusable (missing/invalid key, unknown model, rate limit outlasting every retry).
 
 See **[BENCHMARK_REPORT.md](BENCHMARK_REPORT.md)** for the complete analysis and all backing [`benchmark_results/`](benchmark_results/) `solution.json` files.
 

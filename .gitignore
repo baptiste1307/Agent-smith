@@ -132,6 +132,8 @@ Cargo.lock
 coverage/
 .nyc_output/
 .pytest_cache/
+exams/
+evaluations/
 
 # =========================
 # Docker
