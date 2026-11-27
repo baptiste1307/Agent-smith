@@ -7,6 +7,7 @@ from pathlib import Path
 from agent.loop import agent_loop
 from agent.prompts import build_mbpp_task_prompt
 from llm.metrics import MetricsTracker
+from llm.providers import model_chain
 from mcp_client.client import MCPClient
 from models_public import MBPPTaskInput
 
@@ -34,8 +35,19 @@ def main() -> None:
     )
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", default="codestral-latest")
-    parser.add_argument("--provider-url", default="https://api.mistral.ai/v1")
+    parser.add_argument(
+        "--model-name",
+        default=None,
+        help="LLM model. Defaults to models_config.json (mbpp).",
+    )
+    parser.add_argument(
+        "--provider-url",
+        default=None,
+        help=(
+            "LLM provider API URL. Defaults to models_config.json "
+            "(mbpp). The configured fallback is tried if it fails."
+        ),
+    )
     parser.add_argument(
         "--mcp-server",
         default=None,
@@ -46,6 +58,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    (provider_url, model_name), *fallbacks = model_chain(
+        "mbpp", model_name=args.model_name, provider_url=args.provider_url
+    )
 
     with open(args.task_file, encoding="utf-8") as f:
         # model_validate_json reads JSON and validates required fields.
@@ -65,8 +80,9 @@ def main() -> None:
             exercice=build_mbpp_task_prompt(task),
             mcp_tools_wrappers=mcp_client.get_wrappers(),
             mcp_tools_schema=mcp_client.get_schemas(),
-            model_name=args.model_name,
-            provider_url=args.provider_url,
+            provider_url=provider_url,
+            model_name=model_name,
+            fallbacks=fallbacks,
             max_iterations=10,
             tracker=tracker,
         )

@@ -393,6 +393,40 @@ def get_patch(repo_path: str | Path | None = None) -> str:
         return ""
 
 
+START_TEST_MARKER = ">>>>> Start Test Output"
+END_TEST_MARKER = ">>>>> End Test Output"
+
+
+def _focus_test_output(output: str) -> str:
+    """Keep only the test section of a SWE-bench eval script output.
+
+    The eval script first prints setup and build logs (git status, pip
+    install, compilation) that fill the observation budget, so the pytest
+    results would be cut off. When both markers are present, return the
+    lines between them, with a note saying what was left out.
+    """
+    lines = output.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if START_TEST_MARKER in line),
+        None,
+    )
+    end = next(
+        (
+            i
+            for i in range(len(lines) - 1, -1, -1)
+            if END_TEST_MARKER in lines[i]
+        ),
+        None,
+    )
+    if start is None or end is None or end <= start + 1:
+        return output
+    return (
+        f"[run_tests] Showing the test section only ({start + 1} lines of "
+        "setup/build output omitted before it).\n"
+        + "\n".join(lines[start + 1:end])
+    )
+
+
 def run_tests(
     test_command: str | None = None,
     workdir: str | Path | None = None,
@@ -453,6 +487,9 @@ def run_tests(
                     capture_output=True,
                     timeout=30,
                 )
+                # stderr merged into stdout: the eval script traces its
+                # commands (set -x, hence the markers) on stderr, so the
+                # two streams must stay interleaved to find the test section
                 res = subprocess.run(
                     [
                         "docker",
@@ -461,13 +498,15 @@ def run_tests(
                         "/testbed",
                         cid,
                         "/bin/bash",
-                        "/eval.sh",
+                        "-c",
+                        "/bin/bash /eval.sh 2>&1",
                     ],
                     capture_output=True,
                     text=True,
                     timeout=timeout,
                 )
-                return f"{sync_warning}{res.stdout}\n{res.stderr}".strip()
+                output = _focus_test_output(res.stdout)
+                return f"{sync_warning}{output}\n{res.stderr}".strip()
             except subprocess.TimeoutExpired:
                 return f"Error: Tests timed out after {timeout} seconds."
 

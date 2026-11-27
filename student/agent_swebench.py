@@ -11,6 +11,7 @@ from agent.loop import agent_loop
 from agent.prompts import build_swebench_task_prompt
 from docker_env.container import DockerContainer
 from llm.metrics import MetricsTracker
+from llm.providers import model_chain
 from mcp_client.client import MCPClient
 from models_public import SWEBenchTaskInput
 
@@ -50,8 +51,19 @@ def main() -> None:
     )
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--model-name", default="codestral-latest")
-    parser.add_argument("--provider-url", default="https://api.mistral.ai/v1")
+    parser.add_argument(
+        "--model-name",
+        default=None,
+        help="LLM model. Defaults to models_config.json (swebench).",
+    )
+    parser.add_argument(
+        "--provider-url",
+        default=None,
+        help=(
+            "LLM provider API URL. Defaults to models_config.json "
+            "(swebench). The configured fallback is tried if it fails."
+        ),
+    )
     parser.add_argument(
         "--mcp-server",
         default=None,
@@ -95,6 +107,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    (provider_url, model_name), *fallbacks = model_chain(
+        "swebench", model_name=args.model_name, provider_url=args.provider_url
+    )
 
     with open(args.task_file, encoding="utf-8") as f:
         task = SWEBenchTaskInput.model_validate_json(f.read())
@@ -173,8 +188,9 @@ def main() -> None:
             ),
             mcp_tools_wrappers=mcp_client.get_wrappers(),
             mcp_tools_schema=mcp_client.get_schemas(),
-            model_name=args.model_name,
-            provider_url=args.provider_url,
+            provider_url=provider_url,
+            model_name=model_name,
+            fallbacks=fallbacks,
             max_iterations=30,
             tracker=tracker,
             keep_recent_turns=args.keep_recent_turns,

@@ -15,13 +15,13 @@
       }
     },
     "swebench": {
-      "provider": "mistral",
-      "provider_url": "https://api.mistral.ai/v1",
-      "model_name": "codestral-latest",
+      "provider": "groq",
+      "provider_url": "https://api.groq.com/openai/v1",
+      "model_name": "qwen/qwen3.8-27b",
       "keep_recent_turns": 10,
-      "fallback_provider": "groq",
-      "fallback_provider_url": "https://api.groq.com/openai/v1",
-      "fallback_model_name": "qwen/qwen3.8-27b",
+      "fallback_provider": "mistral",
+      "fallback_provider_url": "https://api.mistral.ai/v1",
+      "fallback_model_name": "codestral-latest",
       "limits": {
         "max_iterations": 30,
         "max_input_tokens": 300000,

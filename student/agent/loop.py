@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from llm.client import DEFAULT_MAX_TOKENS, LLMClient
+from llm.client import (
+    DEFAULT_MAX_TOKENS,
+    LLMClient,
+    LLMResponse,
+    ProviderUnavailableError,
+)
 from llm.metrics import MetricsTracker
 from llm.rotator import KeyRotator
 from sandbox.sandbox import execute, load_config
@@ -126,6 +131,60 @@ def _fit_input_budget(
     )
 
 
+def _build_clients(
+    candidates: list[tuple[str, str]], api_key_env: str | None = None
+) -> list[LLMClient]:
+    """Create one LLMClient per (provider_url, model_name) candidate.
+
+    A candidate whose API key is missing from the environment is skipped
+    with a message; api_key_env only applies to the first candidate.
+
+    Raises:
+        ValueError: If no candidate has an API key.
+    """
+    clients: list[LLMClient] = []
+    errors: list[str] = []
+    for index, (provider_url, model_name) in enumerate(candidates):
+        try:
+            rotator = KeyRotator.auto_detect(
+                provider_url, env_var=api_key_env if index == 0 else None
+            )
+        except ValueError as e:
+            print(f"[LLM] Skipping {model_name} @ {provider_url}: {e}")
+            errors.append(str(e))
+            continue
+        clients.append(LLMClient(provider_url, model_name, rotator=rotator))
+    if not clients:
+        raise ValueError(" / ".join(errors))
+    return clients
+
+
+def _generate_with_fallback(
+    clients: list[LLMClient], index: int, **kwargs: Any
+) -> tuple[LLMResponse, int]:
+    """Call clients[index].generate(), moving to the next client while the
+    current provider is unusable (invalid key, unknown model, rate limit
+    that outlasts every retry).
+
+    Returns:
+        The response and the index of the client that produced it, so
+        that the next turns keep using the working provider.
+    """
+    while True:
+        try:
+            return clients[index].generate(**kwargs), index
+        except ProviderUnavailableError as e:
+            if index + 1 >= len(clients):
+                raise
+            current, following = clients[index], clients[index + 1]
+            print(
+                f"[LLM] {current.model_name} @ {current.provider_url} "
+                f"unavailable ({e}). Switching to {following.model_name} @ "
+                f"{following.provider_url}."
+            )
+            index += 1
+
+
 def agent_loop(
     exercice: str,
     mcp_tools_wrappers: dict[str, Callable[..., Any]] | None = None,
@@ -137,6 +196,7 @@ def agent_loop(
     api_key_env: str | None = None,
     keep_recent_turns: int = 3,
     max_obs_chars: int = 4000,
+    fallbacks: list[tuple[str, str]] | None = None,
 ):
     """Solve an exercise by alternating LLM answers and sandbox executions.
 
@@ -158,16 +218,18 @@ def agent_loop(
         tracker: Records the metrics of each turn, for solution.json.
             None to run without recording.
         api_key_env: Optional environment variable name holding the API key(s).
+        fallbacks: (provider_url, model_name) pairs tried in order when
+            the current provider is unusable (missing or invalid key,
+            unknown model, persistent rate limit).
 
     Returns:
         The answer passed to final_answer(), or None if the LLM did not
         finish within max_iterations turns.
     """
-    client = LLMClient(
-        provider_url,
-        model_name,
-        rotator=KeyRotator.auto_detect(provider_url, env_var=api_key_env),
+    clients = _build_clients(
+        [(provider_url, model_name), *(fallbacks or [])], api_key_env
     )
+    client_index = 0
 
     config = load_config(str(DEFAULT_SANDBOX_CONFIG_PATH))
     system_prompt = build_system_prompt(config, mcp_tools_schema)
@@ -218,8 +280,10 @@ def agent_loop(
                 "before the benchmark timeout)."
             )
 
-        answer = client.generate(
-            prompt_messages,
+        answer, client_index = _generate_with_fallback(
+            clients,
+            client_index,
+            messages=prompt_messages,
             stop=["Observation:"],
             max_tokens=max_tokens,
             deadline=tracker.deadline if tracker else None,

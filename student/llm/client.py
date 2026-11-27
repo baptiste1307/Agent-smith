@@ -62,6 +62,17 @@ def _usage_or_estimate(
 # unprocessable request
 NON_RETRYABLE_STATUSES = (400, 401, 403, 404, 413, 422)
 
+# Among them, the statuses that mean the provider itself cannot be used
+# (invalid key, forbidden, unknown model): another provider may still work
+PROVIDER_UNUSABLE_STATUSES = (401, 403, 404)
+
+
+class ProviderUnavailableError(RuntimeError):
+    """The provider cannot serve this run (bad key, unknown model, or still
+    rate limited after every retry). The agent loop can then switch to a
+    fallback provider instead of failing the task."""
+
+
 # Below this many seconds before the deadline, no new request is sent
 MIN_REQUEST_SECONDS = 3.0
 
@@ -306,6 +317,10 @@ class LLMClient:
 
                 # Request errors: retrying would give the same result, so
                 # stop now
+                if response.status_code in PROVIDER_UNUSABLE_STATUSES:
+                    raise ProviderUnavailableError(
+                        f"LLM request rejected: {last_error}"
+                    )
                 if response.status_code in NON_RETRYABLE_STATUSES:
                     raise RuntimeError(f"LLM request rejected: {last_error}")
 
@@ -351,7 +366,7 @@ class LLMClient:
                 last_error = f"{type(e).__name__}: {e}"
                 self._sleep(1, deadline)
 
-        raise RuntimeError(
+        raise ProviderUnavailableError(
             f"Failed after {self.max_retries + 1} attempts. "
             f"Last error: {last_error}"
         )
